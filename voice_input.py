@@ -1147,7 +1147,6 @@ ic_idle, ic_rec, ic_off, ic_fb = _icon(G), _icon(R), _icon(A), _icon(Y)
 def get_tray_icon():
     if state["recording"]: return ic_rec
     if not state["enabled"]: return ic_off
-    if state["engine"] == "本地": return ic_idle
     return ic_idle
 
 
@@ -1483,6 +1482,7 @@ class MainWindow:
 
     def _toggle(self):
         state["enabled"] = not state["enabled"]
+        (sound_toggle_on if state["enabled"] else sound_toggle_off)()
         self._refresh()
         if not state["enabled"] and state["recording"]:
             stop_recording()
@@ -1506,15 +1506,9 @@ class MainWindow:
                                activebackground=c["err"])
             self.eng_badge.configure(text="", bg=c["bg"])
         elif state["enabled"]:
-            eng = state["engine"]
-            if eng == "本地":
-                self.lbl.configure(text="已启用  ·  本地", fg=c["fg"])
-                self.dot_cv.itemconfigure(self.dot_id, fill=c["accent2"])
-                self.eng_badge.configure(text="  本地  ", fg=c["accent2"], bg=c["card"])
-            else:
-                self.lbl.configure(text="待命", fg=c["fg"])
-                self.dot_cv.itemconfigure(self.dot_id, fill=c["ok"])
-                self.eng_badge.configure(text="", bg=c["bg"])
+            self.lbl.configure(text="已启用", fg=c["fg"])
+            self.dot_cv.itemconfigure(self.dot_id, fill=c["ok"])
+            self.eng_badge.configure(text="", bg=c["bg"])
             self._set_rec_visual(False)
             self.tgl.configure(text="  禁用  ", bg=c["card"], fg=c["fg2"],
                                activebackground=c["card2"])
@@ -1597,15 +1591,14 @@ class SettingsDialog:
         c = main_win.c
         self.win = tk.Toplevel(parent)
         self.win.title("设置 — 言栖")
-        self.win.geometry("480x500")
         self.win.resizable(False, False)
         self.win.configure(bg=c["bg"])
         self.win.transient(parent)
         self.win.grab_set()
-        # 定位在主窗口右侧
+        # 定位在主窗口右侧, 一次设置 size + position (分开调 geometry 后一次会覆盖前一次)
         px, py = parent.winfo_x(), parent.winfo_y()
         pw = parent.winfo_width()
-        self.win.geometry(f"+{px + pw + 8}+{py}")
+        self.win.geometry(f"480x500+{px + pw + 8}+{py}")
         # 自定义 Notebook 样式 (深色)
         style = ttk.Style()
         style.theme_use("clam")
