@@ -5,7 +5,7 @@ import voice_input as vi
 
 def test():
     print("=" * 55)
-    print("  语音输入工具 v5.0 — 自动化端到端测试")
+    print("  言栖 v5.0 — 自动化端到端测试")
     print("=" * 55)
 
     # 1. 配置

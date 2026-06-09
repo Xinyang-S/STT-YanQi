@@ -1,13 +1,16 @@
 #!/usr/bin/env python3
 """
-语音输入工具 — Voice Input for AI Agents (v5.0)
+言栖 (Yán Qī) — Voice Input for AI Agents (v5.0)
 =================================================
 本地离线识别 (sherpa-onnx + SenseVoice 多语种模型)
   · 支持中文 / 英文 / 日文 / 韩文 / 粤语 自动检测
   · 完全离线, 无需联网, 无配额限制
-  · 单文件 ~76MB + 模型 ~120MB
+  · 单文件 ~82MB + 模型 ~230MB
 快捷键: 按住 Right Ctrl 录音 → 松开识别 → 自动粘贴
 录音期间独占麦克风 (WASAPI Exclusive Mode + 切默认设备)
+
+作者: 孙欣阳 (Xinyang Sun)
+项目: https://github.com/Xinyang-S/STT-YanQi
 
 用法: VoiceInput.exe            正常启动
       VoiceInput.exe --minimized   静默启动进托盘 (开机启动用)
@@ -1167,7 +1170,7 @@ class MainWindow:
     def __init__(self, tray_ref, start_minimized=False):
         self.tray = tray_ref
         self.root = tk.Tk()
-        self.root.title("语音输入工具")
+        self.root.title("言栖")
         # Tokyo Night 配色 + 录音态辅助色
         self.c = {
             "bg":     "#1a1b26", "bg2":  "#16161e", "card": "#24283b",
@@ -1569,7 +1572,9 @@ class MainWindow:
 
     def _about(self):
         messagebox.showinfo("关于",
-            "语音输入工具 v5.0\n\n"
+            "言栖 v5.0\n"
+            "Voice Input for AI Agents\n\n"
+            "作者: 孙欣阳 (Xinyang Sun)\n\n"
             "本地离线识别 (sherpa-onnx + SenseVoice 多语种)\n"
             "  → 支持中文 / 英文 / 日文 / 韩文 / 粤语 自动检测\n"
             "  → 离线运行, 无网亦可用, 无配额限制\n\n"
@@ -1591,7 +1596,7 @@ class SettingsDialog:
         self.mw = main_win
         c = main_win.c
         self.win = tk.Toplevel(parent)
-        self.win.title("设置 — 语音输入工具")
+        self.win.title("设置 — 言栖")
         self.win.geometry("480x500")
         self.win.resizable(False, False)
         self.win.configure(bg=c["bg"])
@@ -1800,7 +1805,7 @@ def run_e2e_test():
         sys.stdout.reconfigure(encoding='utf-8', errors='replace')
 
     print("=" * 55)
-    print("  语音输入工具 v5.0 - 全链路测试")
+    print("  言栖 v5.0 - 全链路测试")
     print("=" * 55)
 
     # 1. 引擎
@@ -1911,7 +1916,7 @@ def main():
 
     minimized = "--minimized" in sys.argv
 
-    log(f"语音输入工具 v5.0 启动 (minimized={minimized})")
+    log(f"言栖 v5.0 启动 (minimized={minimized})")
     hl = load_config()
     if not hl:
         messagebox.showerror("本地引擎不可用",
@@ -1934,7 +1939,7 @@ def main():
     kb = keyboard.Listener(on_press=on_press, on_release=on_release); kb.daemon = True; kb.start()
     log("键盘监听已启动 (Right Ctrl 录音, Ctrl+Shift+F9 开关)")
 
-    icon = pystray.Icon("voice_input", icon=ic_idle, title="语音输入工具"); icon.menu = tray_menu(icon)
+    icon = pystray.Icon("voice_input", icon=ic_idle, title="言栖"); icon.menu = tray_menu(icon)
     win = MainWindow(icon, start_minimized=minimized)
 
     stopped = threading.Event()
@@ -1947,7 +1952,7 @@ def main():
             "按住 Right Ctrl 录音 → 松开识别\n"
             "Ctrl+Shift+F9 开关\n"
             "设置中可调整: 开机启动 / 独占设备 / 麦克风 / 识别语言",
-            "语音输入工具 v5.0"
+            "言栖 v5.0"
         )).start()
 
     win.root.mainloop()

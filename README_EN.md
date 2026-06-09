@@ -1,4 +1,4 @@
-# STT-YanQi — Voice Input for AI Agents
+# 言栖 (Yán Qī) — Voice Input for AI Agents
 
 [![Platform](https://img.shields.io/badge/platform-Windows%2010%2F11-0078d4)](https://www.microsoft.com/)
 [![Python](https://img.shields.io/badge/python-3.10%2B-3776ab)](https://www.python.org/)
@@ -6,6 +6,10 @@
 [![Offline](https://img.shields.io/badge/ASR-100%25%20offline-success)]()
 
 > Hold **Right Ctrl** to dictate, release to paste at cursor. 100% local speech recognition, no cloud, no quotas. Built for AI-agent workflows on Windows.
+
+**Author**: 孙欣阳 (Xinyang Sun) · [Project homepage](https://github.com/Xinyang-S/STT-YanQi)
+
+*Yán Qī (言栖) — "voice resting" — a quiet place where your words land.*
 
 Inspired by [Boson](https://github.com/dshsl000/boson) / [CapsWriter](https://github.com/HaujetZhao/CapsWriter) / [Wispr Flow](https://wisprflow.ai/).
 

@@ -1,13 +1,16 @@
-# 语音输入工具 STT-YanQi
+# 言栖 (Yán Qī) — Voice Input for AI Agents
 
 [![Platform](https://img.shields.io/badge/platform-Windows%2010%2F11-0078d4)](https://www.microsoft.com/)
 [![Python](https://img.shields.io/badge/python-3.10%2B-3776ab)](https://www.python.org/)
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 [![Offline](https://img.shields.io/badge/识别-本地离线-success)]()
+![Author](https://img.shields.io/badge/作者-孙欣阳-blue)
 
 > 一款为 AI 时代而生的 Windows 桌面语音输入工具。按住 `Right Ctrl` 说话，松开发送到光标位置。完全本地识别，无云端依赖。
 
-灵感来自 [Boson](https://github.com/dshsl000/boson) / [CapsWriter](https://github.com/HaujetZhao/CapsWriter) / [Wispr Flow](https://wisprflow.ai)，针对中文用户与 AI Agent 输入场景深度优化。
+**作者**: 孙欣阳 (Xinyang Sun) · [项目主页](https://github.com/Xinyang-S/STT-YanQi) · v5.0
+
+灵感来自 [Boson](https://github.com/dshsl000/boson) / [CapsWriter](https://github.com/HaujetZhao/CapsWriter) / [Wispr Flow](https://wisprflow.ai/)，针对中文用户与 AI Agent 输入场景深度优化。
 
 ---
 
