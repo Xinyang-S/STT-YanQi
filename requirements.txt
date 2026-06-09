@@ -1,0 +1,11 @@
+pyaudio
+numpy
+pynput
+pyperclip
+pyautogui
+pillow
+pystray
+pyinstaller
+sherpa-onnx
+# sherpa-onnx 需要 libsndfile (soundfile 读取 WAV); PyInstaller 不需要
+soundfile

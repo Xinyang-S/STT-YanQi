@@ -1,0 +1,49 @@
+# ── 构建产物 ──────────────────────────────────────────
+build/
+dist/
+*.spec.bak
+
+# ── Python 缓存 ───────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# ── 旧的 Whisper 模型 (已切换到 sherpa-onnx) ──────────
+models/ggml-*.bin
+models/ggml-*.bin.*.txt
+
+# ── 压缩的模型包 (用户下载后解压, 不入仓) ────────────
+models/*.tar.bz2
+models/*.tar.gz
+models/*.zip
+
+# ── ONNX 模型文件 (~230MB, 太大不入仓, 用户下载) ────
+models/**/*.onnx
+models/**/*.bin
+models/**/*.pb
+
+# ── 日志 ──────────────────────────────────────────────
+*.log
+build*.log
+
+# ── 本地配置 + 用户数据 ──────────────────────────────
+.voice_input/
+
+# ── 编辑器 / IDE ──────────────────────────────────────
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# ── 测试产物 ──────────────────────────────────────────
+test_output.txt
+test_*.wav
+e2e_*.wav
+
+# ── PyInstaller 临时 ──────────────────────────────────
+_MEI/
