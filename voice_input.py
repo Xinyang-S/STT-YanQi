@@ -728,6 +728,9 @@ class LocalASR:
                 return True
             try:
                 log(f"本地引擎加载模型: {self.model_dir}")
+                # language 在构造时设置 (而非 stream.set_option) —
+                # 后者在 PyInstaller 打包下会抛 "invalid unordered_map<K, T> key"
+                lang = self.language if self.language in ("auto", "zh", "en", "ja", "ko", "yue") else "auto"
                 rec = OfflineRecognizer.from_sense_voice(
                     model=self.model_file,
                     tokens=self.tokens,
@@ -735,10 +738,11 @@ class LocalASR:
                     use_itn=True,
                     debug=False,
                     provider="cpu",
+                    language=lang,
                 )
                 LocalASR._shared = {"dir": self.model_dir, "obj": rec}
                 self._recognizer = rec
-                log("本地引擎就绪")
+                log(f"本地引擎就绪 (language={lang})")
                 return True
             except Exception as e:
                 LocalASR._shared_err = e
@@ -768,10 +772,6 @@ class LocalASR:
             return ""
 
         s = self._recognizer.create_stream()
-        # SenseVoice 支持按 stream 设置语言 (zh/en/ja/ko/yue).
-        # "auto" 留给 SenseVoice 自动检测 — 此时不调用 set_option (传 "auto" 会被 C++ 端 std::map 拒绝)
-        if self.language and self.language != "auto":
-            s.set_option("language", self.language)
         s.accept_waveform(16000, samples)
         # 离线模式无需 input_finished, decode_stream 直接消费波形
         self._recognizer.decode_stream(s)
@@ -1886,6 +1886,28 @@ def main():
     # --test 模式
     if "--test" in sys.argv:
         sys.exit(run_e2e_test())
+
+    # --recognize <file> 模式: 仅识别指定 wav 文件 (调试用)
+    if "--recognize" in sys.argv:
+        try:
+            idx = sys.argv.index("--recognize")
+            audio_path = sys.argv[idx + 1]
+        except (IndexError, ValueError):
+            print("用法: VoiceInput.exe --recognize <wav 文件>")
+            return 1
+        if sys.stdout.encoding != 'utf-8':
+            sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+        print(f"识别文件: {audio_path}")
+        load_config()
+        asr = ASRManager()
+        try:
+            txt, eng = asr.transcribe(audio_path)
+            print(f"[{eng}] {txt}")
+            return 0
+        except Exception as e:
+            print(f"[FAIL] {e}")
+            traceback.print_exc()
+            return 1
 
     minimized = "--minimized" in sys.argv
 

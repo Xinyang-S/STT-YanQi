@@ -15,13 +15,24 @@ if exist "*.spec" del /q "*.spec" 2>nul
 echo [2/3] 开始打包 (需要 1-2 分钟)...
 echo.
 
+REM 找 sherpa-onnx 的原生 DLL 路径
+for /f "delims=" %%i in ('python -c "import sherpa_onnx, os; print(os.path.join(os.path.dirname(sherpa_onnx.__file__), 'lib'))"') do set SHERPA_LIB=%%i
+echo   sherpa-onnx lib: %SHERPA_LIB%
+
+REM 注意: 模型不打包进 EXE. 原因:
+REM   1) PyInstaller --onefile 解压 _MEIPASS 的 ONNX 模型, decode_stream 偶尔抛
+REM      "invalid unordered_map<K, T> key" (C++ std::map::at 异常), 同代码 + 同模型
+REM      从磁盘加载就 OK. 怀疑是 _MEIPASS 路径下文件 IO 行为差异.
+REM   2) 模型 230MB 进 EXE 不合理 — 用户首次跑 download_model.bat 即可.
 python -m PyInstaller ^
     --onefile ^
     --windowed ^
     --icon=app.ico ^
     --name=VoiceInput ^
     --add-data "app.ico;." ^
-    --add-data "models;models" ^
+    --add-binary "%SHERPA_LIB%\sherpa-onnx-c-api.dll;sherpa_onnx/lib" ^
+    --add-binary "%SHERPA_LIB%\sherpa-onnx-cxx-api.dll;sherpa_onnx/lib" ^
+    --runtime-hook=hooks/hook-sherpa_onnx.py ^
     --hidden-import=pystray._win32 ^
     --hidden-import=pynput.keyboard._win32 ^
     --hidden-import=pyaudio ^
