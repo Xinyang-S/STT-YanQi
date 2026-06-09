@@ -161,10 +161,26 @@ python voice_input.py --test    # 全链路测试（录音 3 秒 + 识别）
 build.bat
 
 # 输出
-dist/VoiceInput.exe  (~76 MB)
+dist/VoiceInput.exe  (~82 MB)
 ```
 
-> 模型文件不进 exe，发布时建议连同 `models/` 目录一起打包为 zip（[Releases](https://github.com/Xinyang-S/STT-YanQi/releases)）。
+> **模型 (~230MB) 不打包进 EXE**：PyInstaller `--onefile` 解压到 `_MEIPASS` 下的 ONNX 模型在
+> `decode_stream` 时会抛 `invalid unordered_map<K, T> key` 异常（C++ std::map::at），同一份代码 +
+> 同一份模型从磁盘加载则完全正常。规避方案是不打包模型，让用户首次运行 `download_model.bat`
+> 下载到 `models/` 目录。这样 EXE 体积也合理（82MB vs 540MB）。
+
+发布流程：
+
+```bash
+# 1. 打包 EXE
+build.bat
+# 2. 打包用户包
+mkdir VoiceInput-v5.0
+cp dist/VoiceInput.exe VoiceInput-v5.0/
+cp download_model.bat VoiceInput-v5.0/
+cp README.md VoiceInput-v5.0/
+# models/ 留空，用户跑 download_model.bat 自动下载
+```
 
 ---
 
@@ -172,11 +188,12 @@ dist/VoiceInput.exe  (~76 MB)
 
 | 症状 | 原因 | 解决 |
 | --- | --- | --- |
-| 启动提示 "本地引擎不可用" | sherpa-onnx 未装 / 模型未下载 | `pip install sherpa-onnx` + 下载模型 |
+| 启动提示 "本地引擎不可用" | sherpa-onnx 未装 / 模型未下载 | `pip install sherpa-onnx` + 运行 `download_model.bat` |
 | 识别全是空白 | 录音设备未授权 / 静音 | 设置中选择正确的麦克风；提高 Windows 输入音量 |
 | 独占设备失败 | 只有 1 个录音设备 | 在设置中关闭"录音时独占设备" |
 | 按键无提示音 | 系统静音 / winsound 异常 | 取消系统静音；查看 `%USERPROFILE%\.voice_input\voice_input.log` |
 | PyInstaller 打包后报 `libomp140.x64.dll` 缺失 | 系统缺少 VC++ runtime | 安装 [VC++ 2015-2022 Redist](https://aka.ms/vs/17/release/vc_redist.x64.exe) |
+| `invalid unordered_map<K, T> key` | 已知问题: PyInstaller _MEIPASS 加载 ONNX | 不要把模型打进 EXE；从磁盘加载 |
 | 识别速度慢 | CPU 核心数低 / 录音过长 | 关闭其他占用 CPU 的程序；模型加载 1-2s 是正常的 |
 
 ---

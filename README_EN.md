@@ -153,10 +153,25 @@ Reasons:
 build.bat
 
 # Output
-dist/VoiceInput.exe  (~76 MB)
+dist/VoiceInput.exe  (~82 MB)
 ```
 
-The model is **not** embedded in the .exe. Ship the `models/` folder alongside, or zip both into the release.
+> **Model (~230 MB) is not embedded**: PyInstaller `--onefile` extracts the ONNX model
+> to `_MEIPASS`, and the SenseVoice C++ decoder throws `invalid unordered_map<K, T> key`
+> on `decode_stream` from that location. Loading the same model from disk works fine.
+> Workaround: don't bundle the model — users run `download_model.bat` once to fetch it.
+> This also keeps the EXE at 82 MB instead of 540 MB.
+
+Release packaging:
+
+```bash
+build.bat
+mkdir VoiceInput-v5.0
+cp dist/VoiceInput.exe VoiceInput-v5.0/
+cp download_model.bat VoiceInput-v5.0/
+cp README_EN.md VoiceInput-v5.0/
+# models/ stays empty — users get it via download_model.bat
+```
 
 ---
 
