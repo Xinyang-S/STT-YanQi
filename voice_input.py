@@ -564,15 +564,21 @@ SHERPA_SENSE_VOICE_URL = (
 def _resolve_model_dir():
     """解析本地模型目录. 优先级:
       1) config.model_dir (用户指定)
-      2) ./models/SHERPA_SENSE_VOICE_MODEL (相对 exe 工作目录)
-      3) <exe 所在目录>/models/SHERPA_SENSE_VOICE_MODEL (frozen 模式)
-      4) ./models (开发模式默认)
+      2) sys._MEIPASS/models/SHERPA_SENSE_VOICE_MODEL (PyInstaller --onefile 解压根)
+      3) <exe 所在目录>/models/SHERPA_SENSE_VOICE_MODEL (frozen --onedir 模式)
+      4) ./models/SHERPA_SENSE_VOICE_MODEL (开发模式)
+      5) ./models (开发模式, 直接用 models 目录)
     返回 (model_dir, tokens, model_file). 任一缺失则 None.
     """
     candidates = []
     cfg_dir = config.get("model_dir", "") if isinstance(config.get("model_dir"), str) else ""
     if cfg_dir:
         candidates.append(cfg_dir)
+    # PyInstaller --onefile: 资源解压到 sys._MEIPASS
+    meipass = getattr(sys, "_MEIPASS", None)
+    if meipass:
+        candidates.append(os.path.join(meipass, "models", SHERPA_SENSE_VOICE_MODEL))
+        candidates.append(os.path.join(meipass, "models"))
     if getattr(sys, "frozen", False):
         exe_dir = os.path.dirname(sys.executable)
         candidates.append(os.path.join(exe_dir, "models", SHERPA_SENSE_VOICE_MODEL))
@@ -762,8 +768,10 @@ class LocalASR:
             return ""
 
         s = self._recognizer.create_stream()
-        # SenseVoice 支持按 stream 设置语言 (auto/zh/en/ja/ko/yue)
-        s.set_option("language", self.language or "auto")
+        # SenseVoice 支持按 stream 设置语言 (zh/en/ja/ko/yue).
+        # "auto" 留给 SenseVoice 自动检测 — 此时不调用 set_option (传 "auto" 会被 C++ 端 std::map 拒绝)
+        if self.language and self.language != "auto":
+            s.set_option("language", self.language)
         s.accept_waveform(16000, samples)
         # 离线模式无需 input_finished, decode_stream 直接消费波形
         self._recognizer.decode_stream(s)
