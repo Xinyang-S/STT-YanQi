@@ -588,7 +588,9 @@ DEFAULT_CONFIG = {
     "exclusive_device": True,  # 录音时独占音频设备 (WASAPI 独占 + 切默认麦克风)
     "language": "auto",         # auto / zh / en / ja / ko / yue
     "model_dir": "",            # 模型目录; 留空时按优先级自动搜索
-    "floating_bubble": True,   # 关闭主窗口后是否显示悬浮气泡 (v0.7.0)
+    "floating_bubble": True,   # 关闭主窗口后是否显示悬浮气泡
+    "bubble_x": None,           # 气泡 X 坐标 (持久化); None = 屏幕右侧默认
+    "bubble_y": None,           # 气泡 Y 坐标 (持久化)
 }
 
 # sherpa-onnx SenseVoice 多语种模型 (int8) — 离线本地引擎, 唯一识别后端
@@ -1187,6 +1189,259 @@ def get_tray_icon():
 
 
 # ═══════════════════════════════════════════════════════════
+#  悬浮气泡 (v0.7.0)
+#  Why: 用户希望关闭主窗口后仍能感知"应用在后台, 仍在监听". 气泡状态
+#  同步 state[] 实时反映待命/录音中/已关闭, 点击恢复主窗口, 右键弹出
+#  托盘同款菜单 (启用切换/显示主窗口/退出).
+# ═══════════════════════════════════════════════════════════
+class FloatingBubble:
+    """悬浮气泡: 64x64 无边框 Toplevel + Canvas 绘制圆形 + 状态色.
+
+    状态映射 (与 state[] 同步, 由 _animate 50ms 轮询):
+      录音中  → 红色圆 + 脉冲环 + 麦克风图标
+      已禁用  → 深灰圆 + 灰色麦克风图标 (暗淡)
+      待命    → 蓝/白圆 + 蓝色麦克风图标
+      引擎坏  → 黄色圆 + ⚠ 警告 (最弱视觉, 引导用户去看主窗口)
+    """
+    SIZE = 64
+    CLICK_THRESHOLD = 5  # 移动 < 5px 视为点击, 否则为拖动
+
+    def __init__(self, main_win):
+        self.mw = main_win
+        self.c = main_win.c
+        self.root = main_win.root
+        self.win = None
+        self.visible = False
+        self._drag_data = {"x": 0, "y": 0, "moved": False}
+        self._press_anim = None
+        self._press_anim_t = 0
+        self._state_cache = None  # 上次绘制的状态, 减少重复绘制
+        self._menu = None  # 右键菜单
+        self._create()
+
+    def _create(self):
+        c = self.c
+        self.win = tk.Toplevel(self.root)
+        self.win.overrideredirect(True)  # 无标题栏
+        self.win.attributes("-topmost", True)  # 永远在最上层
+        self.win.geometry(f"{self.SIZE}x{self.SIZE}")
+        # 透明背景: 让 canvas 自己的 background 显示. 这里不设 -alpha 避免全窗半透.
+        # tkinter 在 Windows 下用 -transparentcolor 比 -alpha 更可控 (只让某种颜色透)
+        # 但我们的气泡需要看到外部桌面 — 这里用 overrideredirect 已经达到"无边框"效果
+        # 内部用 Canvas 绘制带阴影的圆形即可, 不需要真透明.
+        self.cv = tk.Canvas(self.win, width=self.SIZE, height=self.SIZE,
+                            bg=c["bg"], highlightthickness=0, cursor="hand2")
+        self.cv.pack()
+        # 阴影圆 (略大于主体, 浅灰色; tkinter 不支持 alpha, 用纯灰)
+        s = self.SIZE
+        self._shadow = self.cv.create_oval(4, 6, s - 4, s - 2, fill="#e0e0e5", outline="")
+        # 主体圆 (颜色由 _set_state 决定)
+        self._body = self.cv.create_oval(4, 4, s - 4, s - 4, fill=c["accent"], outline="")
+        # 麦克风图标 (中心)
+        self._icon = self.cv.create_text(s // 2, s // 2, text="🎙",
+                                         font=("Segoe UI Emoji", 22), fill="#ffffff")
+        # 录音态脉冲环 (用柔和红色, 默认隐藏)
+        self._pulse = self.cv.create_oval(2, 2, s - 2, s - 2, outline=c["rec"], width=2)
+        self.cv.itemconfigure(self._pulse, state="hidden")
+        # 事件: 拖动 + 点击恢复 + 右键菜单
+        self.cv.bind("<ButtonPress-1>", self._on_press)
+        self.cv.bind("<B1-Motion>", self._on_drag)
+        self.cv.bind("<ButtonRelease-1>", self._on_release)
+        self.cv.bind("<Button-3>", self._on_right_click)  # 右键 (Windows)
+        # 双击: 强制显示主窗口
+        self.cv.bind("<Double-Button-1>", lambda e: self._show_main())
+        # 右键菜单 (预先创建, 每次弹出前刷新状态文字)
+        self._menu = tk.Menu(self.win, tearoff=0,
+                             bg=c["bg2"], fg=c["fg"],
+                             activebackground=c["accent"], activeforeground="#ffffff",
+                             font=("Microsoft YaHei UI", 9), relief=tk.FLAT, bd=1)
+        # 初始隐藏
+        self.win.withdraw()
+
+    # ─────────────── 状态 / 绘制 ───────────────
+    def _current_state(self):
+        """根据 state[] 决定气泡视觉. 返回 (body_color, icon_text, icon_color, show_pulse)."""
+        c = self.c
+        if not state["enabled"]:
+            return (c["fg3"], "🎙", "#ffffff", False)  # 已禁用: 灰
+        if state["recording"]:
+            return (c["rec"], "■", "#ffffff", True)    # 录音中: 红 + 脉冲
+        # 待命: 蓝
+        return (c["accent"], "🎙", "#ffffff", False)
+
+    def _redraw(self, force=False):
+        body_color, icon_text, icon_color, show_pulse = self._current_state()
+        sig = (body_color, icon_text, show_pulse)
+        if not force and sig == self._state_cache:
+            return
+        self._state_cache = sig
+        self.cv.itemconfigure(self._body, fill=body_color)
+        self.cv.itemconfigure(self._icon, text=icon_text, fill=icon_color,
+                              font=("Segoe UI Emoji" if icon_text == "🎙" else "Segoe UI Symbol", 22))
+        if show_pulse:
+            self.cv.itemconfigure(self._pulse, state="normal")
+        else:
+            self.cv.itemconfigure(self._pulse, state="hidden")
+
+    def _animate(self):
+        """50ms 轮询: 状态色变化 + 录音脉冲扩散 + 按压弹动"""
+        if not self.visible:
+            return
+        c = self.c
+        t = time.time()
+        # 录音态脉冲
+        if state["recording"]:
+            phase = (t * 1.5) % 1.0  # 0..1
+            r_extra = 4 * phase
+            s = self.SIZE
+            self.cv.coords(self._pulse, 2 - r_extra, 2 - r_extra,
+                           s - 2 + r_extra, s - 2 + r_extra)
+            alpha = max(1, int(4 * (1.0 - phase)))
+            self.cv.itemconfigure(self._pulse, width=alpha)
+        # 按压弹动
+        if self._press_anim:
+            self._press_anim_t += 50
+            scale = 1.0
+            for t_off, s in self._press_anim:
+                if self._press_anim_t >= t_off: scale = s
+            if self._press_anim_t >= self._press_anim[-1][0]:
+                self._press_anim = None
+            self._apply_scale(scale)
+        self._redraw()
+        self.win.after(50, self._animate)
+
+    def _apply_scale(self, scale):
+        s = self.SIZE
+        cx, cy = s // 2, s // 2
+        r = (s // 2 - 4) * scale
+        self.cv.coords(self._body, cx - r, cy - r, cx + r, cy + r)
+        # icon 同步缩放
+        font_size = max(14, int(22 * scale))
+        self.cv.itemconfigure(self._icon, font=("Segoe UI Emoji", font_size))
+
+    def _trigger_press_anim(self):
+        self._press_anim = [(0, 0.92), (60, 1.06), (160, 0.98), (220, 1.0)]
+        self._press_anim_t = 0
+
+    # ─────────────── 拖动 / 点击 / 右键 ───────────────
+    def _on_press(self, e):
+        self._drag_data["x"] = e.x_root
+        self._drag_data["y"] = e.y_root
+        self._drag_data["moved"] = False
+        self._trigger_press_anim()
+
+    def _on_drag(self, e):
+        dx = e.x_root - self._drag_data["x"]
+        dy = e.y_root - self._drag_data["y"]
+        if abs(dx) + abs(dy) > self.CLICK_THRESHOLD:
+            self._drag_data["moved"] = True
+        x = self.win.winfo_x() + dx
+        y = self.win.winfo_y() + dy
+        self.win.geometry(f"+{x}+{y}")
+        self._drag_data["x"] = e.x_root
+        self._drag_data["y"] = e.y_root
+
+    def _on_release(self, e):
+        # 持久化位置
+        x = self.win.winfo_x(); y = self.win.winfo_y()
+        config["bubble_x"] = x; config["bubble_y"] = y
+        save_config()
+        # 没拖动 = 点击 → 恢复主窗口
+        if not self._drag_data["moved"]:
+            self._show_main()
+
+    def _on_right_click(self, e):
+        c = self.c
+        # 刷新菜单项
+        self._menu.delete(0, tk.END)
+        s = "已启用" if state["enabled"] else "已禁用"
+        rec = " · 录音中" if state["recording"] else ""
+        self._menu.add_command(label=f"言栖  ·  {s}{rec}", state=tk.DISABLED)
+        self._menu.add_separator()
+        toggle_label = "禁用功能" if state["enabled"] else "启用功能"
+        self._menu.add_command(label=toggle_label, command=self._menu_toggle)
+        self._menu.add_command(label="显示主窗口", command=self._show_main)
+        self._menu.add_separator()
+        self._menu.add_command(label="退出", command=self._menu_exit)
+        try:
+            self._menu.tk_popup(e.x_root, e.y_root)
+        finally:
+            self._menu.grab_release()
+
+    def _menu_toggle(self):
+        state["enabled"] = not state["enabled"]
+        log(f"气泡菜单切换: {'启用' if state['enabled'] else '禁用'}")
+        (sound_toggle_on if state["enabled"] else sound_toggle_off)()
+        ui_queue.put(("toggled", state["enabled"]))
+        if not state["enabled"] and state["recording"]:
+            stop_recording()
+
+    def _menu_exit(self):
+        # 与 tray_exit 同款, 但从气泡触发
+        state["enabled"] = False; state["recording"] = False
+        orig = _mic_guard_state.get("orig_id")
+        if orig:
+            try:
+                _policy_set_default(orig)
+                _mic_guard_state["orig_id"] = None
+                log("退出时已恢复默认麦克风")
+            except Exception as e:
+                log(f"退出时恢复麦克风失败: {e}")
+        log("气泡退出")
+        try: self.win.destroy()
+        except Exception: pass
+        os._exit(0)
+
+    def _show_main(self):
+        """显示主窗口, 隐藏气泡"""
+        # 先解 withdraw 否则 deiconify 没效果
+        try:
+            self.mw.root.deiconify()
+            self.mw.root.lift()
+            self.mw.root.focus_force()
+        except Exception as e:
+            log(f"恢复主窗口失败: {e}")
+        self.hide()
+
+    # ─────────────── 显示 / 隐藏 ───────────────
+    def show(self):
+        if self.visible: return
+        if not config.get("floating_bubble", True):
+            return
+        # 位置: 持久化坐标 > 默认 (屏幕右侧中部)
+        x = config.get("bubble_x")
+        y = config.get("bubble_y")
+        if x is None or y is None:
+            sw = self.root.winfo_screenwidth()
+            sh = self.root.winfo_screenheight()
+            x = sw - self.SIZE - 30
+            y = sh // 2 - self.SIZE // 2
+        # 边界保护: 至少 5px 在屏内
+        sw = self.root.winfo_screenwidth()
+        sh = self.root.winfo_screenheight()
+        x = max(0, min(x, sw - self.SIZE))
+        y = max(0, min(y, sh - self.SIZE))
+        self.win.geometry(f"+{x}+{y}")
+        self.win.deiconify()
+        self.visible = True
+        self._state_cache = None
+        self._redraw(force=True)
+        self._animate()
+
+    def hide(self):
+        if not self.visible: return
+        self.visible = False
+        try: self.win.withdraw()
+        except Exception: pass
+
+    def destroy(self):
+        try: self.win.destroy()
+        except Exception: pass
+        self.visible = False
+        self.win = None
+
+
+# ═══════════════════════════════════════════════════════════
 #  主界面 (v0.6.0 浅色系: 白底 + 浅灰 + 蓝/绿强调)
 # ═══════════════════════════════════════════════════════════
 class MainWindow:
@@ -1225,7 +1480,7 @@ class MainWindow:
         self.root.geometry(f"{w}x{h}+{sw - w - 60}+{sh - h - 100}")
         self.root.resizable(True, True); self.root.minsize(360, 480)
         self.root.configure(bg=self.c["bg"])
-        self.root.protocol("WM_DELETE_WINDOW", lambda: self.root.withdraw())
+        self.root.protocol("WM_DELETE_WINDOW", self._on_close)
         if start_minimized:
             self.root.withdraw()  # 开机启动时直接进托盘, 不弹主窗口
         # 动画状态
@@ -1234,8 +1489,24 @@ class MainWindow:
         self._press_anim = None  # 按下动画: 帧序列 [(t_offset, radius), ...]
         self._press_anim_t = 0
         self._settings_win = None  # 防设置窗口重复打开
-        self.bubble = None  # 悬浮气泡实例 (v0.7.0 接入, 当前为 None)
+        self.bubble = None  # 悬浮气泡实例 (下面创建)
         self._build(); self._poll(); self._animate()
+        # 创建悬浮气泡 (默认开启, 但默认不显示 — 用户关窗口时才显示)
+        self.bubble = FloatingBubble(self)
+        # 启动时若 minimized (开机启动), 自动显示气泡
+        if start_minimized and config.get("floating_bubble", True):
+            self.root.after(200, self.bubble.show)
+
+    def _on_close(self):
+        """点击 X 关闭主窗口: 隐藏主窗口, 视设置决定是否显示悬浮气泡."""
+        self.root.withdraw()
+        # 关闭设置窗口 (避免遮罩残留)
+        if self._settings_win is not None:
+            try: self._settings_win.destroy()
+            except Exception: pass
+            self._settings_win = None
+        if config.get("floating_bubble", True) and self.bubble is not None:
+            self.bubble.show()
 
     # ─────────────── 构建 UI ───────────────
     def _build(self):
@@ -1593,7 +1864,11 @@ class MainWindow:
                     self.txt.insert("1.0", "⚠  " + m[1], "error")
                     self.txt.configure(state=tk.DISABLED)
                 elif k == "toggled": self._refresh(); self._update_tray()
-                elif k == "show": self.root.deiconify(); self.root.lift()
+                elif k == "show":
+                    self.root.deiconify(); self.root.lift()
+                    # 托盘恢复主窗口时, 同步隐藏气泡
+                    if self.bubble is not None and self.bubble.visible:
+                        self.bubble.hide()
                 elif k == "status": self._refresh()
         except queue_mod.Empty:
             pass
@@ -1892,7 +2167,9 @@ def tray_exit(icon, item=None):
             log("退出时已恢复默认麦克风")
         except Exception as e:
             log(f"退出时恢复麦克风失败: {e}")
-    log("退出"); icon.stop(); os._exit(0)
+    log("退出"); icon.stop()
+    # 兜底退出: pystray.stop 是非阻塞的, 用 os._exit 确保所有线程终结
+    os._exit(0)
 
 def tray_menu(icon):
     s = "已启用" if state["enabled"] else "已禁用"
@@ -2065,6 +2342,8 @@ def main():
             "言栖 v0.5.0"
         )).start()
 
+    # X 按钮: 已在 MainWindow.__init__ 中通过 protocol 绑定到 win._on_close
+    # (隐藏主窗口 + 显示气泡)
     win.root.mainloop()
     stopped.set(); kb.stop(); state["enabled"] = False; log("程序退出")
 
