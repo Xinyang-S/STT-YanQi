@@ -2083,56 +2083,33 @@ class SettingsDialog:
         try:
             px, py = parent.winfo_rootx(), parent.winfo_rooty()
             pw = parent.winfo_width()
-            w, h = 500, 520
+            w, h = 480, 540
             self.win.geometry(f"{w}x{h}+{px + pw + 8}+{py}")
         except Exception:
-            self.win.geometry("500x520")
+            self.win.geometry("480x540")
         self.win.update_idletasks()
         self.win.grab_set()
-        # ---- sidebar nav (no ttk.Notebook - avoids rendering bugs) ----
-        top = tk.Frame(self.win, bg=c["bg"], height=44)
-        top.pack(side=tk.TOP, fill=tk.X)
-        top.pack_propagate(False)
-        tk.Label(top, text="设置", font=("Microsoft YaHei UI", 14, "bold"),
-                 fg=c["fg"], bg=c["bg"]).pack(side=tk.LEFT, padx=16, pady=10)
-        tk.Frame(self.win, bg=c["border"], height=1).pack(side=tk.TOP, fill=tk.X)
-        body = tk.Frame(self.win, bg=c["bg"])
-        body.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
-        sidebar = tk.Frame(body, bg=c["bg"], width=120)
-        sidebar.pack(side=tk.LEFT, fill=tk.Y)
-        sidebar.pack_propagate(False)
-        sidebar_inner = tk.Frame(sidebar, bg=c["bg"])
-        sidebar_inner.pack(fill=tk.X, padx=0, pady=8)
-        tk.Frame(body, bg=c["border"], width=1).pack(side=tk.LEFT, fill=tk.Y)
-        self._content_frame = tk.Frame(body, bg=c["bg"])
-        self._content_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        # nav items: Canvas-drawn buttons with left accent bar
-        self._nav_items = {}
-        self._nav_keys = {}
-        self._nav_active = None
-        for key, label in [("general", "通用"), ("audio", "音频设备")]:
-            nav_cv = tk.Canvas(sidebar_inner, width=118, height=36,
-                               bg=c["bg"], highlightthickness=0, cursor="hand2")
-            nav_cv.pack(pady=1)
-            bar = nav_cv.create_rectangle(0, 8, 3, 28, fill="", outline="")
-            txt = nav_cv.create_text(16, 18, text=label, anchor=tk.W,
-                                     font=("Microsoft YaHei UI", 10), fill=c["fg2"])
-            nav_cv.bind("<Button-1>", self._nav_click)
-            nav_cv.bind("<Enter>", self._nav_hover_on)
-            nav_cv.bind("<Leave>", self._nav_hover_off)
-            self._nav_keys[nav_cv] = key
-            self._nav_items[key] = (nav_cv, bar, txt)
-        # pre-build pages
-        self._pages = {}
-        self._pages["general"] = self._general_tab(self._content_frame)
-        self._pages["audio"] = self._audio_tab(self._content_frame)
-        for f in self._pages.values():
-            f.pack_forget()
-        self._switch_tab("general")
-        # bottom bar
-        tk.Frame(self.win, bg=c["border"], height=1).pack(side=tk.TOP, fill=tk.X)
+        style = ttk.Style()
+        try: style.theme_use("clam")
+        except Exception: pass
+        style.configure("TNotebook", background=c["bg"], borderwidth=0, tabmargins=(0, 0, 0, 0))
+        style.configure("TNotebook.Tab",
+                        background=c["card"], foreground=c["fg2"],
+                        padding=(18, 10), font=("Microsoft YaHei UI", 9),
+                        borderwidth=0)
+        style.map("TNotebook.Tab",
+                  background=[("selected", c["bg"]), ("active", c["border"])],
+                  foreground=[("selected", c["accent"]), ("active", c["fg"])])
+        style.configure("TFrame", background=c["bg"])
+        style.configure("TLabel", background=c["bg"], foreground=c["fg"])
+        tk.Frame(self.win, bg=c["border"], height=1).pack(side=tk.TOP, fill=tk.X, padx=20, pady=(16, 0))
+        nb = ttk.Notebook(self.win)
+        nb.pack(fill=tk.BOTH, expand=True, padx=20, pady=(0, 0))
+        nb.add(self._general_tab(nb), text="  通用  ")
+        nb.add(self._audio_tab(nb), text="  音频设备  ")
+        tk.Frame(self.win, bg=c["border"], height=1).pack(side=tk.TOP, fill=tk.X, padx=20, pady=(0, 0))
         bot = tk.Frame(self.win, bg=c["bg"])
-        bot.pack(side=tk.TOP, fill=tk.X, padx=16, pady=8)
+        bot.pack(side=tk.TOP, fill=tk.X, padx=20, pady=10)
         tk.Label(bot, text="设置修改后立即生效", font=("Microsoft YaHei UI", 8),
                  fg=c["fg3"], bg=c["bg"]).pack(side=tk.LEFT)
         close_btn = tk.Button(bot, text="完成", font=("Microsoft YaHei UI", 9, "bold"),
@@ -2142,41 +2119,11 @@ class SettingsDialog:
                               command=self._on_close)
         close_btn.pack(side=tk.RIGHT)
 
-    def _nav_click(self, event):
-        key = self._nav_keys.get(event.widget)
-        if key: self._switch_tab(key)
-
-    def _nav_hover_on(self, event):
-        key = self._nav_keys.get(event.widget)
-        if key and self._nav_active != key:
-            cv = self._nav_items[key][0]
-            txt = self._nav_items[key][2]
-            cv.itemconfigure(txt, fill=self.mw.c["fg"])
-
-    def _nav_hover_off(self, event):
-        key = self._nav_keys.get(event.widget)
-        if key and self._nav_active != key:
-            cv = self._nav_items[key][0]
-            txt = self._nav_items[key][2]
-            cv.itemconfigure(txt, fill=self.mw.c["fg2"])
-
-    def _switch_tab(self, key):
-        c = self.mw.c
-        for k, (cv, bar, txt) in self._nav_items.items():
-            cv.itemconfigure(bar, fill="")
-            cv.itemconfigure(txt, fill=c["fg2"], font=("Microsoft YaHei UI", 10))
-            cv.configure(bg=c["bg"])
-        if key in self._nav_items:
-            cv, bar, txt = self._nav_items[key]
-            cv.configure(bg=c["card"])
-            cv.itemconfigure(bar, fill=c["accent"])
-            cv.itemconfigure(txt, fill=c["fg"], font=("Microsoft YaHei UI", 10, "bold"))
-            self._nav_active = key
-        for k, f in self._pages.items():
-            if k == key:
-                f.pack(fill=tk.BOTH, expand=True, padx=(16, 16), pady=(4, 0))
-            else:
-                f.pack_forget()
+    def _on_close(self):
+        try: self.win.grab_release()
+        except Exception: pass
+        self.mw._settings_win = None
+        self.win.destroy()
 
     def _section_label(self, parent, text, hint=""):
         """分组小标题: 浅色无圆点, 配下方小灰字提示"""
