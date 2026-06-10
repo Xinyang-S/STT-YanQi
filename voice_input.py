@@ -588,7 +588,7 @@ DEFAULT_CONFIG = {
     "exclusive_device": True,  # 录音时独占音频设备 (WASAPI 独占 + 切默认麦克风)
     "language": "auto",         # auto / zh / en / ja / ko / yue
     "model_dir": "",            # 模型目录; 留空时按优先级自动搜索
-    "floating_bubble": True,   # 关闭主窗口后是否显示悬浮气泡
+    "floating_bubble": False,  # 关闭主窗口后是否显示悬浮气泡 (默认关闭)
     "bubble_x": None,           # 气泡 X 坐标 (持久化); None = 屏幕右侧默认
     "bubble_y": None,           # 气泡 Y 坐标 (持久化)
 }
@@ -1275,22 +1275,17 @@ def refresh_tray_icons():
 
 
 # ═══════════════════════════════════════════════════════════
-#  悬浮气泡 (v0.7.0)
-#  Why: 用户希望关闭主窗口后仍能感知"应用在后台, 仍在监听". 气泡状态
-#  同步 state[] 实时反映待命/录音中/已关闭, 点击恢复主窗口, 右键弹出
-#  托盘同款菜单 (启用切换/显示主窗口/退出).
+#  悬浮气泡 (v0.7.1 玻璃感 + 录音脉动)
+#  Why: 用户希望气泡有质感, 录音时有动效反馈.
+#  玻璃感: Toplevel 用 -transparentcolor 把指定颜色挖空, Canvas 画半透白圆 +
+#           模糊感阴影 = 模拟 macOS 风格毛玻璃.
+#  录音动效: 多层脉冲环从中心向外扩散, 颜色从红渐变为透明.
 # ═══════════════════════════════════════════════════════════
 class FloatingBubble:
-    """悬浮气泡: 64x64 无边框 Toplevel + Canvas 绘制圆形 + 状态色.
-
-    状态映射 (与 state[] 同步, 由 _animate 50ms 轮询):
-      录音中  → 红色圆 + 脉冲环 + 麦克风图标
-      已禁用  → 深灰圆 + 灰色麦克风图标 (暗淡)
-      待命    → 蓝/白圆 + 蓝色麦克风图标
-      引擎坏  → 黄色圆 + ⚠ 警告 (最弱视觉, 引导用户去看主窗口)
-    """
-    SIZE = 64
-    CLICK_THRESHOLD = 5  # 移动 < 5px 视为点击, 否则为拖动
+    SIZE = 72  # 稍大一点, 给脉冲环留空间
+    CLICK_THRESHOLD = 5
+    # 玻璃透明色 (canvas bg 用这个色, 然后 Toplevel -transparentcolor 相同)
+    _GLASS_KEY = "#010203"
 
     def __init__(self, main_win):
         self.mw = main_win
@@ -1299,115 +1294,112 @@ class FloatingBubble:
         self.win = None
         self.visible = False
         self._drag_data = {"x": 0, "y": 0, "moved": False}
-        self._press_anim = None
-        self._press_anim_t = 0
-        self._state_cache = None  # 上次绘制的状态, 减少重复绘制
-        self._menu = None  # 右键菜单
+        self._state_cache = None
+        self._menu = None
+        # 录音脉动: 3 圈, 不同相位
+        self._pulses = []   # [(oval_id, phase_offset), ...]
+        self._pulse_count = 3
         self._create()
 
     def _create(self):
         c = self.c
-        self.win = tk.Toplevel(self.root)
-        self.win.overrideredirect(True)  # 无标题栏
-        self.win.attributes("-topmost", True)  # 永远在最上层
-        self.win.geometry(f"{self.SIZE}x{self.SIZE}")
-        # 透明背景: 让 canvas 自己的 background 显示. 这里不设 -alpha 避免全窗半透.
-        # tkinter 在 Windows 下用 -transparentcolor 比 -alpha 更可控 (只让某种颜色透)
-        # 但我们的气泡需要看到外部桌面 — 这里用 overrideredirect 已经达到"无边框"效果
-        # 内部用 Canvas 绘制带阴影的圆形即可, 不需要真透明.
-        self.cv = tk.Canvas(self.win, width=self.SIZE, height=self.SIZE,
-                            bg=c["bg"], highlightthickness=0, cursor="hand2")
-        self.cv.pack()
-        # 阴影圆 (略大于主体, 浅灰色; tkinter 不支持 alpha, 用纯灰)
         s = self.SIZE
-        self._shadow = self.cv.create_oval(4, 6, s - 4, s - 2, fill="#e0e0e5", outline="")
-        # 主体圆 (颜色由 _set_state 决定)
-        self._body = self.cv.create_oval(4, 4, s - 4, s - 4, fill=c["accent"], outline="")
-        # 麦克风图标 (中心)
-        self._icon = self.cv.create_text(s // 2, s // 2, text="🎙",
-                                         font=("Segoe UI Emoji", 22), fill="#ffffff")
-        # 录音态脉冲环 (用柔和红色, 默认隐藏)
-        self._pulse = self.cv.create_oval(2, 2, s - 2, s - 2, outline=c["rec"], width=2)
-        self.cv.itemconfigure(self._pulse, state="hidden")
-        # 事件: 拖动 + 点击恢复 + 右键菜单
+        self.win = tk.Toplevel(self.root)
+        self.win.overrideredirect(True)
+        self.win.attributes("-topmost", True)
+        self.win.geometry(f"{s}x{s}")
+        try:
+            self.win.attributes("-transparentcolor", self._GLASS_KEY)
+        except Exception:
+            pass  # 降级: 不透明
+        self.cv = tk.Canvas(self.win, width=s, height=s,
+                            bg=self._GLASS_KEY, highlightthickness=0, cursor="hand2")
+        self.cv.pack()
+        # 外层阴影 (大圆, 极淡灰, 模拟卡片投影)
+        self._shadow = self.cv.create_oval(2, 4, s - 2, s - 0, fill="#e5e7eb", outline="")
+        # 玻璃主体: 白色半透明圆
+        self._body = self.cv.create_oval(4, 4, s - 4, s - 4, fill="", outline="")
+        # 高光层 (玻璃反光, 顶部月牙)
+        self._highlight = self.cv.create_oval(12, 6, s - 12, s // 2 + 6,
+                                               fill="#f8f8fc", outline="")
+        # 品牌图 (中心, 58x58)
+        self._photo_id = None
+        self._photo_ref = None
+        if _brand_img is not None:
+            from PIL import ImageTk
+            bird = _brand_img.copy()
+            bird.thumbnail((46, 46), Image.LANCZOS)
+            self._photo_ref = ImageTk.PhotoImage(bird)
+            self._photo_id = self.cv.create_image(s // 2, s // 2, image=self._photo_ref)
+        # 录音脉冲环 (3 圈, 不同相位)
+        pulse_colors = [c["rec"], "#ff6b6b", "#ff8e8e"]
+        for i in range(self._pulse_count):
+            oval = self.cv.create_oval(0, 0, 0, 0, outline=pulse_colors[i], width=2)
+            self.cv.itemconfigure(oval, state="hidden")
+            self._pulses.append((oval, i * 0.33))  # 相位偏移 0, 0.33, 0.66
+        # 事件
         self.cv.bind("<ButtonPress-1>", self._on_press)
         self.cv.bind("<B1-Motion>", self._on_drag)
         self.cv.bind("<ButtonRelease-1>", self._on_release)
-        self.cv.bind("<Button-3>", self._on_right_click)  # 右键 (Windows)
-        # 双击: 强制显示主窗口
+        self.cv.bind("<Button-3>", self._on_right_click)
         self.cv.bind("<Double-Button-1>", lambda e: self._show_main())
-        # 右键菜单 (预先创建, 每次弹出前刷新状态文字)
         self._menu = tk.Menu(self.win, tearoff=0,
                              bg=c["card"], fg=c["fg"],
                              activebackground=c["accent"], activeforeground="#ffffff",
                              font=("Microsoft YaHei UI", 9), relief=tk.FLAT, bd=1)
-        # 初始隐藏
         self.win.withdraw()
 
     # ─────────────── 状态 / 绘制 ───────────────
     def _current_state(self):
-        """根据 state[] 决定气泡视觉. 返回 (body_color, icon_text, icon_color, show_pulse)."""
         c = self.c
         if not state["enabled"]:
-            return (c["fg3"], "🎙", "#ffffff", False)  # 已禁用: 灰
+            return ("empty", c["off"], False)       # 禁用: 极淡灰
         if state["recording"]:
-            return (c["rec"], "■", "#ffffff", True)    # 录音中: 红 + 脉冲
-        # 待命: 蓝
-        return (c["accent"], "🎙", "#ffffff", False)
+            return ("solid", c["rec"], True)         # 录音: 红底 + 脉冲
+        return ("glass", c["accent"], False)          # 待命: 玻璃感蓝
 
     def _redraw(self, force=False):
-        body_color, icon_text, icon_color, show_pulse = self._current_state()
-        sig = (body_color, icon_text, show_pulse)
+        mode, color, pulsing = self._current_state()
+        sig = (mode, color, pulsing)
         if not force and sig == self._state_cache:
             return
         self._state_cache = sig
-        self.cv.itemconfigure(self._body, fill=body_color)
-        self.cv.itemconfigure(self._icon, text=icon_text, fill=icon_color,
-                              font=("Segoe UI Emoji" if icon_text == "🎙" else "Segoe UI Symbol", 22))
-        if show_pulse:
-            self.cv.itemconfigure(self._pulse, state="normal")
-        else:
-            self.cv.itemconfigure(self._pulse, state="hidden")
+        c = self.c
+        if mode == "empty":
+            self.cv.itemconfigure(self._body, fill="#f0f0f5", outline=c["border"])
+            self.cv.itemconfigure(self._highlight, state="hidden")
+        elif mode == "solid":
+            self.cv.itemconfigure(self._body, fill=color, outline=color)
+            self.cv.itemconfigure(self._highlight, state="hidden")
+        else:  # glass
+            # 玻璃感: 白底 + 80% 不透明 + 带颜色描边 + 高光
+            self.cv.itemconfigure(self._body, fill="#ffffff", outline=color, width=2)
+            self.cv.itemconfigure(self._highlight, state="normal")
+        # 脉冲环: recording 时显示
+        for oval, _ in self._pulses:
+            self.cv.itemconfigure(oval, state="normal" if pulsing else "hidden")
 
     def _animate(self):
-        """50ms 轮询: 状态色变化 + 录音脉冲扩散 + 按压弹动"""
         if not self.visible:
             return
-        c = self.c
-        t = time.time()
-        # 录音态脉冲
         if state["recording"]:
-            phase = (t * 1.5) % 1.0  # 0..1
-            r_extra = 4 * phase
+            t = time.time()
             s = self.SIZE
-            self.cv.coords(self._pulse, 2 - r_extra, 2 - r_extra,
-                           s - 2 + r_extra, s - 2 + r_extra)
-            alpha = max(1, int(4 * (1.0 - phase)))
-            self.cv.itemconfigure(self._pulse, width=alpha)
-        # 按压弹动
-        if self._press_anim:
-            self._press_anim_t += 50
-            scale = 1.0
-            for t_off, s in self._press_anim:
-                if self._press_anim_t >= t_off: scale = s
-            if self._press_anim_t >= self._press_anim[-1][0]:
-                self._press_anim = None
-            self._apply_scale(scale)
+            for i, (oval, phase_off) in enumerate(self._pulses):
+                phase = (t * 1.2 + phase_off) % 1.0
+                # 脉冲半径: 从主体边缘向外扩散
+                base_r = s / 2 - 2  # 主体圆半径
+                r = base_r + 8 * phase
+                cx, cy = s / 2, s / 2
+                self.cv.coords(oval, cx - r, cy - r, cx + r, cy + r)
+                # 透明度: 越外越淡
+                alpha = max(1, int(4 * (1.0 - phase)))
+                self.cv.itemconfigure(oval, width=alpha)
+        else:
+            for oval, _ in self._pulses:
+                self.cv.coords(oval, 0, 0, 0, 0)
         self._redraw()
         self.win.after(50, self._animate)
-
-    def _apply_scale(self, scale):
-        s = self.SIZE
-        cx, cy = s // 2, s // 2
-        r = (s // 2 - 4) * scale
-        self.cv.coords(self._body, cx - r, cy - r, cx + r, cy + r)
-        # icon 同步缩放
-        font_size = max(14, int(22 * scale))
-        self.cv.itemconfigure(self._icon, font=("Segoe UI Emoji", font_size))
-
-    def _trigger_press_anim(self):
-        self._press_anim = [(0, 0.92), (60, 1.06), (160, 0.98), (220, 1.0)]
-        self._press_anim_t = 0
 
     # ─────────────── 拖动 / 点击 / 右键 ───────────────
     def _on_press(self, e):
@@ -2075,7 +2067,6 @@ class SettingsDialog:
     def __init__(self, parent, main_win):
         self.mw = main_win
         c = main_win.c
-        # 避免重复打开 (防止用户连点设置按钮产生多个窗口)
         if hasattr(main_win, "_settings_win") and main_win._settings_win is not None:
             try:
                 main_win._settings_win.lift(); main_win._settings_win.focus_force()
@@ -2089,45 +2080,59 @@ class SettingsDialog:
         self.win.attributes("-topmost", True)
         main_win._settings_win = self.win
         self.win.protocol("WM_DELETE_WINDOW", self._on_close)
-        # 定位: 主窗口右侧, 主窗口居中或不在屏幕内时 fallback 到屏幕中
         try:
             px, py = parent.winfo_rootx(), parent.winfo_rooty()
             pw = parent.winfo_width()
-            w, h = 480, 540
+            w, h = 500, 520
             self.win.geometry(f"{w}x{h}+{px + pw + 8}+{py}")
         except Exception:
-            self.win.geometry("480x540")
+            self.win.geometry("500x520")
         self.win.update_idletasks()
         self.win.grab_set()
-        # 自定义 Notebook 样式 (浅色: 蓝条 + 白底)
-        style = ttk.Style()
-        try: style.theme_use("clam")
-        except Exception: pass
-        style.configure("TNotebook", background=c["bg"], borderwidth=0, tabmargins=(0, 0, 0, 0))
-        style.configure("TNotebook.Tab",
-                        background=c["bg"], foreground=c["fg3"],
-                        padding=(16, 8), font=("Microsoft YaHei UI", 9),
-                        borderwidth=0)
-        style.map("TNotebook.Tab",
-                  background=[("selected", c["card"]), ("active", c["bg"])],
-                  foreground=[("selected", c["accent"]), ("active", c["fg2"])])
-        style.configure("TFrame", background=c["bg"])
-        # 浅色下 ttk 默认 Label/LabelFrame 也得改背景
-        style.configure("TLabel", background=c["bg"], foreground=c["fg"])
-        # 顶部分隔
-        tk.Frame(self.win, bg=c["border"], height=1).pack(side=tk.TOP, fill=tk.X, padx=20, pady=(16, 0))
-        # Notebook
-        nb = ttk.Notebook(self.win)
-        nb.pack(fill=tk.BOTH, expand=True, padx=20, pady=(0, 0))
-        # ── 通用 tab
-        nb.add(self._general_tab(nb), text="  通用  ")
-        # ── 音频 tab
-        nb.add(self._audio_tab(nb), text="  音频设备  ")
-        # 底部分隔
-        tk.Frame(self.win, bg=c["border"], height=1).pack(side=tk.TOP, fill=tk.X, padx=20, pady=(0, 0))
-        # 底栏
+        # ---- sidebar nav (no ttk.Notebook - avoids rendering bugs) ----
+        top = tk.Frame(self.win, bg=c["bg"], height=44)
+        top.pack(side=tk.TOP, fill=tk.X)
+        top.pack_propagate(False)
+        tk.Label(top, text="设置", font=("Microsoft YaHei UI", 14, "bold"),
+                 fg=c["fg"], bg=c["bg"]).pack(side=tk.LEFT, padx=16, pady=10)
+        tk.Frame(self.win, bg=c["border"], height=1).pack(side=tk.TOP, fill=tk.X)
+        body = tk.Frame(self.win, bg=c["bg"])
+        body.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
+        sidebar = tk.Frame(body, bg=c["bg"], width=120)
+        sidebar.pack(side=tk.LEFT, fill=tk.Y)
+        sidebar.pack_propagate(False)
+        sidebar_inner = tk.Frame(sidebar, bg=c["bg"])
+        sidebar_inner.pack(fill=tk.X, padx=0, pady=8)
+        tk.Frame(body, bg=c["border"], width=1).pack(side=tk.LEFT, fill=tk.Y)
+        self._content_frame = tk.Frame(body, bg=c["bg"])
+        self._content_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        # nav items: Canvas-drawn buttons with left accent bar
+        self._nav_items = {}
+        self._nav_keys = {}
+        self._nav_active = None
+        for key, label in [("general", "通用"), ("audio", "音频设备")]:
+            nav_cv = tk.Canvas(sidebar_inner, width=118, height=36,
+                               bg=c["bg"], highlightthickness=0, cursor="hand2")
+            nav_cv.pack(pady=1)
+            bar = nav_cv.create_rectangle(0, 8, 3, 28, fill="", outline="")
+            txt = nav_cv.create_text(16, 18, text=label, anchor=tk.W,
+                                     font=("Microsoft YaHei UI", 10), fill=c["fg2"])
+            nav_cv.bind("<Button-1>", self._nav_click)
+            nav_cv.bind("<Enter>", self._nav_hover_on)
+            nav_cv.bind("<Leave>", self._nav_hover_off)
+            self._nav_keys[nav_cv] = key
+            self._nav_items[key] = (nav_cv, bar, txt)
+        # pre-build pages
+        self._pages = {}
+        self._pages["general"] = self._general_tab(self._content_frame)
+        self._pages["audio"] = self._audio_tab(self._content_frame)
+        for f in self._pages.values():
+            f.pack_forget()
+        self._switch_tab("general")
+        # bottom bar
+        tk.Frame(self.win, bg=c["border"], height=1).pack(side=tk.TOP, fill=tk.X)
         bot = tk.Frame(self.win, bg=c["bg"])
-        bot.pack(side=tk.TOP, fill=tk.X, padx=20, pady=10)
+        bot.pack(side=tk.TOP, fill=tk.X, padx=16, pady=8)
         tk.Label(bot, text="设置修改后立即生效", font=("Microsoft YaHei UI", 8),
                  fg=c["fg3"], bg=c["bg"]).pack(side=tk.LEFT)
         close_btn = tk.Button(bot, text="完成", font=("Microsoft YaHei UI", 9, "bold"),
@@ -2137,11 +2142,41 @@ class SettingsDialog:
                               command=self._on_close)
         close_btn.pack(side=tk.RIGHT)
 
-    def _on_close(self):
-        try: self.win.grab_release()
-        except Exception: pass
-        self.mw._settings_win = None
-        self.win.destroy()
+    def _nav_click(self, event):
+        key = self._nav_keys.get(event.widget)
+        if key: self._switch_tab(key)
+
+    def _nav_hover_on(self, event):
+        key = self._nav_keys.get(event.widget)
+        if key and self._nav_active != key:
+            cv = self._nav_items[key][0]
+            txt = self._nav_items[key][2]
+            cv.itemconfigure(txt, fill=self.mw.c["fg"])
+
+    def _nav_hover_off(self, event):
+        key = self._nav_keys.get(event.widget)
+        if key and self._nav_active != key:
+            cv = self._nav_items[key][0]
+            txt = self._nav_items[key][2]
+            cv.itemconfigure(txt, fill=self.mw.c["fg2"])
+
+    def _switch_tab(self, key):
+        c = self.mw.c
+        for k, (cv, bar, txt) in self._nav_items.items():
+            cv.itemconfigure(bar, fill="")
+            cv.itemconfigure(txt, fill=c["fg2"], font=("Microsoft YaHei UI", 10))
+            cv.configure(bg=c["bg"])
+        if key in self._nav_items:
+            cv, bar, txt = self._nav_items[key]
+            cv.configure(bg=c["card"])
+            cv.itemconfigure(bar, fill=c["accent"])
+            cv.itemconfigure(txt, fill=c["fg"], font=("Microsoft YaHei UI", 10, "bold"))
+            self._nav_active = key
+        for k, f in self._pages.items():
+            if k == key:
+                f.pack(fill=tk.BOTH, expand=True, padx=(16, 16), pady=(4, 0))
+            else:
+                f.pack_forget()
 
     def _section_label(self, parent, text, hint=""):
         """分组小标题: 浅色无圆点, 配下方小灰字提示"""
