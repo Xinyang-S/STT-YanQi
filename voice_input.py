@@ -588,6 +588,7 @@ DEFAULT_CONFIG = {
     "exclusive_device": True,  # 录音时独占音频设备 (WASAPI 独占 + 切默认麦克风)
     "language": "auto",         # auto / zh / en / ja / ko / yue
     "model_dir": "",            # 模型目录; 留空时按优先级自动搜索
+    "floating_bubble": True,   # 关闭主窗口后是否显示悬浮气泡 (v0.7.0)
 }
 
 # sherpa-onnx SenseVoice 多语种模型 (int8) — 离线本地引擎, 唯一识别后端
@@ -1186,17 +1187,17 @@ def get_tray_icon():
 
 
 # ═══════════════════════════════════════════════════════════
-#  主界面
+#  主界面 (v0.6.0 浅色系: 白底 + 浅灰 + 蓝/绿强调)
 # ═══════════════════════════════════════════════════════════
 class MainWindow:
-    # 录音按钮中心 (Canvas 140x140)
-    _RB_CX, _RB_CY = 70, 70
-    _RB_R = 24  # 中心圆基础半径
-    _RB_PULSE = (35, 50, 65)  # 三圈脉冲环基础半径 (录音态)
-    _RB_BREATH = 28  # 呼吸光外圈基础半径
-    # 频谱条 (Canvas 220x32)
+    # 录音按钮中心 (Canvas 160x160)
+    _RB_CX, _RB_CY = 80, 80
+    _RB_R = 32  # 中心圆基础半径 (放大, 浅色下小圆显得瘦弱)
+    _RB_PULSE = (44, 58, 72)  # 三圈脉冲环基础半径 (录音态)
+    _RB_BREATH = 38  # 呼吸光外圈基础半径
+    # 频谱条 (Canvas 240x32)
     _SP_BARS = 32
-    _SP_W = 220
+    _SP_W = 240
     _SP_BAR_W = 3
     _SP_GAP = 2
     _SP_MAX_H = 22
@@ -1205,20 +1206,24 @@ class MainWindow:
         self.tray = tray_ref
         self.root = tk.Tk()
         self.root.title("言栖")
-        # Tokyo Night 配色 + 录音态辅助色
+        # 浅色系调色板 (Apple 风格: #f5f5f7 灰底 / #ffffff 卡片 / #0066cc 蓝)
+        # Why: 抛弃 Tokyo Night 深色 — 用户明确要求"简约淡色系浅色系".
+        # 用大圆 + 浅色背景, 录音态用红色 + 浅红脉冲环; idle 用白圆+灰描边 + 蓝色麦克风图标.
         self.c = {
-            "bg":     "#1a1b26", "bg2":  "#16161e", "card": "#24283b",
-            "card2":  "#2a2f45", "border": "#414868", "fg":   "#c0caf5",
-            "fg2":    "#9aa5ce", "fg3":  "#565f89", "accent": "#7aa2f7",
-            "accent2":"#bb9af7", "ok":   "#9ece6a", "warn": "#e0af68",
-            "err":    "#f7768e", "rec":  "#f7768e", "rec_glow": "#ff79c6",
-            "ok_dim": "#5a7a3a",
+            "bg":      "#f5f5f7", "bg2":   "#ffffff", "card":  "#ffffff",
+            "card2":   "#ebebef", "border": "#e3e3e8", "border2": "#d0d0d6",
+            "fg":      "#1d1d1f", "fg2":   "#6e6e73", "fg3":   "#a1a1a6",
+            "accent":  "#0066cc", "accent2":"#5856d6", "ok":    "#34c759",
+            "warn":    "#ff9500", "err":   "#ff3b30", "rec":   "#ff3b30",
+            "rec_glow":"#ff453a", "rec_soft": "#ffe5e3",  # 录音态外环柔和色
+            "btn_fg":  "#ffffff",  # 主按钮文字 (白)
+            "shadow":  "#000000",   # 阴影色 (用 alpha)
         }
         # 定位屏幕右下角
         sw = self.root.winfo_screenwidth(); sh = self.root.winfo_screenheight()
-        w, h = 380, 580
+        w, h = 380, 560
         self.root.geometry(f"{w}x{h}+{sw - w - 60}+{sh - h - 100}")
-        self.root.resizable(True, True); self.root.minsize(360, 500)
+        self.root.resizable(True, True); self.root.minsize(360, 480)
         self.root.configure(bg=self.c["bg"])
         self.root.protocol("WM_DELETE_WINDOW", lambda: self.root.withdraw())
         if start_minimized:
@@ -1228,6 +1233,8 @@ class MainWindow:
         self._rec_btn_pressed = False
         self._press_anim = None  # 按下动画: 帧序列 [(t_offset, radius), ...]
         self._press_anim_t = 0
+        self._settings_win = None  # 防设置窗口重复打开
+        self.bubble = None  # 悬浮气泡实例 (v0.7.0 接入, 当前为 None)
         self._build(); self._poll(); self._animate()
 
     # ─────────────── 构建 UI ───────────────
@@ -1235,45 +1242,56 @@ class MainWindow:
         c = self.c
         # ── 底栏 (先 BOTTOM pack) ──
         bot = tk.Frame(self.root, bg=c["bg"])
-        bot.pack(side=tk.BOTTOM, fill=tk.X, padx=20, pady=(10, 14))
+        bot.pack(side=tk.BOTTOM, fill=tk.X, padx=20, pady=(8, 12))
         tk.Label(bot, text="v0.5.0", font=("Consolas", 8), fg=c["fg3"], bg=c["bg"]).pack(side=tk.LEFT)
-        self.copy_btn = self._mk_nav_btn(bot, "📋  复制", self._copy_result)
-        self.copy_btn.pack(side=tk.RIGHT, padx=(6, 0))
-        self._mk_nav_btn(bot, "⚙  设置",
-                         lambda: SettingsDialog(self.root, self)).pack(side=tk.RIGHT, padx=(6, 0))
+        self.copy_btn = self._mk_nav_btn(bot, "复制", self._copy_result)
+        self.copy_btn.pack(side=tk.RIGHT, padx=(4, 0))
+        self._mk_nav_btn(bot, "设置",
+                         lambda: SettingsDialog(self.root, self)).pack(side=tk.RIGHT, padx=(4, 0))
         self._mk_nav_btn(bot, "关于", self._about).pack(side=tk.RIGHT)
 
-        # ── 顶栏 (TOP pack, 固定 56px) ──
-        top = tk.Frame(self.root, bg=c["bg2"], height=56)
+        # 顶部分隔线 (浅色, 1px)
+        sep = tk.Frame(self.root, bg=c["border"], height=1)
+        sep.pack(side=tk.TOP, fill=tk.X)
+
+        # ── 顶栏 (TOP pack, 固定 52px, 白底) ──
+        top = tk.Frame(self.root, bg=c["bg2"], height=52)
         top.pack(side=tk.TOP, fill=tk.X)
         top.pack_propagate(False)
         left = tk.Frame(top, bg=c["bg2"])
         left.pack(side=tk.LEFT, padx=18)
-        self.dot_cv = tk.Canvas(left, width=14, height=14, bg=c["bg2"], highlightthickness=0)
+        # 状态点 (10x10, idle = 绿, recording = 红, off = 灰)
+        self.dot_cv = tk.Canvas(left, width=10, height=10, bg=c["bg2"], highlightthickness=0)
         self.dot_cv.pack(side=tk.LEFT, padx=(0, 8), pady=21)
-        self.dot_id = self.dot_cv.create_oval(2, 2, 12, 12, fill=c["ok"], outline="")
+        self.dot_id = self.dot_cv.create_oval(1, 1, 9, 9, fill=c["ok"], outline="")
         self.lbl = tk.Label(left, text="待命", font=("Microsoft YaHei UI", 10, "bold"),
                             fg=c["fg"], bg=c["bg2"])
-        self.lbl.pack(side=tk.LEFT, pady=18)
+        self.lbl.pack(side=tk.LEFT, pady=16)
         right = tk.Frame(top, bg=c["bg2"])
         right.pack(side=tk.RIGHT, padx=14)
-        self.tgl = tk.Button(right, text="  禁用  ", font=("Microsoft YaHei UI", 9),
-                             fg=c["fg2"], bg=c["card"], activebackground=c["card2"],
-                             activeforeground=c["fg"], relief=tk.FLAT, cursor="hand2",
-                             bd=0, highlightthickness=0, padx=4, command=self._toggle)
-        self.tgl.pack(side=tk.RIGHT, padx=(8, 0), pady=14)
+        # 模式徽章 (独占 / 共享) — 隐藏时为空
         self.mode_lbl = tk.Label(right, text="", font=("Microsoft YaHei UI", 8),
                                  fg=c["fg3"], bg=c["bg2"])
-        self.mode_lbl.pack(side=tk.RIGHT, pady=20)
+        self.mode_lbl.pack(side=tk.RIGHT, pady=18)
+        # 启用/禁用 切换按钮 (浅色 pill 风)
+        self.tgl = tk.Button(right, text="已启用", font=("Microsoft YaHei UI", 9),
+                             fg=c["accent"], bg="#e5f1ff", activebackground="#d0e7ff",
+                             activeforeground=c["accent"], relief=tk.FLAT, cursor="hand2",
+                             bd=0, highlightthickness=0, padx=10, pady=3, command=self._toggle)
+        self.tgl.pack(side=tk.RIGHT, padx=(8, 0), pady=14)
+
+        # 顶下分隔线
+        sep2 = tk.Frame(self.root, bg=c["border"], height=1)
+        sep2.pack(side=tk.TOP, fill=tk.X)
 
         # ── 录音区 (TOP pack, 固定高度) ──
         rec_frame = tk.Frame(self.root, bg=c["bg"])
-        rec_frame.pack(side=tk.TOP, fill=tk.X, pady=(4, 0))
-        # 录音按钮 Canvas (140 半径 24, 三圈脉冲 35/50/65)
-        self.rbtn_cv = tk.Canvas(rec_frame, width=140, height=140, bg=c["bg"],
+        rec_frame.pack(side=tk.TOP, fill=tk.X, pady=(8, 0))
+        # 录音按钮 Canvas (160x160)
+        self.rbtn_cv = tk.Canvas(rec_frame, width=160, height=160, bg=c["bg"],
                                  highlightthickness=0, cursor="hand2")
         self.rbtn_cv.pack()
-        # 3 圈脉冲环 (录音时显示)
+        # 3 圈脉冲环 (录音时显示, 浅红色 + 渐变宽度)
         self._pulses = []
         for base_r in self._RB_PULSE:
             oval = self.rbtn_cv.create_oval(
@@ -1282,21 +1300,21 @@ class MainWindow:
                 outline=c["rec_glow"], width=1, fill="")
             self.rbtn_cv.itemconfigure(oval, state="hidden")
             self._pulses.append(oval)
-        # 呼吸光外圈
+        # 呼吸光外圈 (柔和的浅红填充, 不抢眼)
         self._breath = self.rbtn_cv.create_oval(
             self._RB_CX - self._RB_BREATH, self._RB_CY - self._RB_BREATH,
             self._RB_CX + self._RB_BREATH, self._RB_CY + self._RB_BREATH,
-            outline=c["rec_glow"], width=2, fill="")
+            outline="", fill=c["rec_soft"])
         self.rbtn_cv.itemconfigure(self._breath, state="hidden")
-        # 主体圆
+        # 主体圆 (idle: 白底 + 浅灰描边; recording: 红色)
         self.rbtn_circle = self.rbtn_cv.create_oval(
             self._RB_CX - self._RB_R, self._RB_CY - self._RB_R,
             self._RB_CX + self._RB_R, self._RB_CY + self._RB_R,
-            fill=c["ok"], outline="")
+            fill=c["bg2"], outline=c["border2"], width=1.5)
         # 中心图标
         self.rbtn_icon = self.rbtn_cv.create_text(
             self._RB_CX, self._RB_CY, text="🎙",
-            font=("Segoe UI Emoji", 24), fill=c["bg"])
+            font=("Segoe UI Emoji", 22), fill=c["accent"])
         # 事件
         self.rbtn_cv.bind("<ButtonPress-1>", lambda e: self._on_press())
         self.rbtn_cv.bind("<ButtonRelease-1>", lambda e: self._on_release())
@@ -1304,13 +1322,14 @@ class MainWindow:
 
         # 提示行: "按住说话" + 快捷键 pill
         hint_row = tk.Frame(rec_frame, bg=c["bg"])
-        hint_row.pack(pady=(12, 0))
+        hint_row.pack(pady=(4, 0))
         self.rbtn_hint = tk.Label(hint_row, text="按住说话",
                                   font=("Microsoft YaHei UI", 10), fg=c["fg2"], bg=c["bg"])
-        self.rbtn_hint.pack(side=tk.LEFT, padx=(0, 6))
+        self.rbtn_hint.pack(side=tk.LEFT, padx=(0, 8))
+        # 快捷键 pill: 浅灰底 + 深色字
         self.key_pill = tk.Label(hint_row, text=" Right Ctrl ",
                                  font=("Cascadia Mono", 9, "bold"),
-                                 fg=c["accent"], bg=c["card"],
+                                 fg=c["fg"], bg=c["card2"],
                                  padx=8, pady=2)
         self.key_pill.pack(side=tk.LEFT)
 
@@ -1335,18 +1354,21 @@ class MainWindow:
         res_title.pack(fill=tk.X)
         tk.Label(res_title, text="识别结果", font=("Microsoft YaHei UI", 9, "bold"),
                  fg=c["fg2"], bg=c["bg"]).pack(side=tk.LEFT)
-        self.eng_badge = tk.Label(res_title, text="", font=("Microsoft YaHei UI", 8, "bold"),
-                                  fg=c["ok"], bg=c["card"], padx=8, pady=2)
+        # 引擎徽章 (本地)
+        self.eng_badge = tk.Label(res_title, text="本地 SenseVoice",
+                                  font=("Microsoft YaHei UI", 8),
+                                  fg=c["fg3"], bg=c["bg"])
         self.eng_badge.pack(side=tk.RIGHT)
+        # 文本卡片: 白底 + 1px 浅灰描边 + 圆角效果 (tkinter 没圆角, 用内边距营造)
         text_container = tk.Frame(res_frame, bg=c["card"], bd=0,
                                    highlightthickness=1, highlightbackground=c["border"])
         text_container.pack(fill=tk.BOTH, expand=True, pady=(6, 0))
-        self.txt = tk.Text(text_container, font=("Microsoft YaHei UI", 11),
+        self.txt = tk.Text(text_container, font=("Microsoft YaHei UI", 12),
                            fg=c["fg"], bg=c["card"], relief=tk.FLAT,
-                           wrap=tk.CHAR, borderwidth=0, padx=12, pady=10,
+                           wrap=tk.WORD, borderwidth=0, padx=14, pady=12,
                            insertbackground=c["accent"], spacing1=2, spacing3=2,
                            height=8, takefocus=0)
-        # 滚动条 (解决 winfo_height 与实际渲染不一致的 bug, 让 text 内部能滚)
+        # 滚动条
         scroll = tk.Scrollbar(text_container, command=self.txt.yview, bd=0,
                               bg=c["card2"], troughcolor=c["card"],
                               activebackground=c["border"], width=6)
@@ -1354,11 +1376,12 @@ class MainWindow:
         self.txt.configure(yscrollcommand=scroll.set)
         self.txt.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         # 富文本 tag
-        self.txt.tag_configure("title", font=("Microsoft YaHei UI", 13, "bold"),
-                               foreground=c["accent"], spacing1=4, spacing3=4)
+        self.txt.tag_configure("title", font=("Microsoft YaHei UI", 14, "bold"),
+                               foreground=c["fg2"], spacing1=4, spacing3=4)
         self.txt.tag_configure("kbd", font=("Cascadia Mono", 9, "bold"),
-                               foreground=c["accent"],
-                               background=c["bg2"], spacing1=0, spacing3=0)
+                               foreground=c["fg"],
+                               background=c["card2"],
+                               spacing1=0, spacing3=0)
         self.txt.tag_configure("result", font=("Microsoft YaHei UI", 12),
                                foreground=c["fg"], lmargin1=2, lmargin2=2)
         self.txt.tag_configure("error", font=("Microsoft YaHei UI", 11),
@@ -1368,16 +1391,17 @@ class MainWindow:
         self.root.after_idle(self._set_text_placeholder)
 
     def _mk_nav_btn(self, parent, text, cmd):
+        """底部导航按钮: 浅色文字按钮, hover 时变色"""
         c = self.c
         return tk.Button(parent, text=text, font=("Microsoft YaHei UI", 9),
-                         fg=c["fg2"], bg=c["bg"], activebackground=c["card"],
+                         fg=c["fg2"], bg=c["bg"], activebackground=c["card2"],
                          activeforeground=c["fg"], relief=tk.FLAT, cursor="hand2",
                          bd=0, highlightthickness=0, padx=8, pady=2, command=cmd)
 
     def _set_text_placeholder(self):
         self.txt.configure(state=tk.NORMAL)
         self.txt.delete("1.0", tk.END)
-        self.txt.insert("1.0", "等待语音输入…", "title")
+        self.txt.insert("1.0", "等待语音输入", "title")
         self.txt.insert("end", "\n\n按住  ")
         self.txt.insert("end", "Right Ctrl", "kbd")
         self.txt.insert("end", "  说话，或点击上方按钮")
@@ -1411,26 +1435,27 @@ class MainWindow:
         self._press_anim_t = 0
 
     def _set_rec_visual(self, on):
-        """切换录音态视觉"""
+        """切换录音态视觉 (浅色: idle 白底灰描边, 录音 红底白图标)"""
         c = self.c
         if on:
-            self.rbtn_cv.itemconfigure(self.rbtn_circle, fill=c["err"])
-            self.rbtn_cv.itemconfigure(self.rbtn_icon, text="■", fill="#ffffff",
+            self.rbtn_cv.itemconfigure(self.rbtn_circle, fill=c["err"], outline=c["err"])
+            self.rbtn_cv.itemconfigure(self.rbtn_icon, text="■", fill=c["btn_fg"],
                                        font=("Segoe UI Symbol", 22))
             for p in self._pulses: self.rbtn_cv.itemconfigure(p, state="normal")
             self.rbtn_cv.itemconfigure(self._breath, state="normal")
             for b in self._sp_bars: self.sp_cv.itemconfigure(b, state="normal")
             self.rbtn_hint.configure(text="松开结束", fg=c["err"])
-            self.key_pill.configure(text=" 释放 Ctrl ", fg=c["err"], bg=c["card"])
+            self.key_pill.configure(text=" 释放 Ctrl ", fg=c["err"], bg="#ffe5e3")
         else:
-            self.rbtn_cv.itemconfigure(self.rbtn_circle, fill=c["ok"])
-            self.rbtn_cv.itemconfigure(self.rbtn_icon, text="🎙", fill=c["bg"],
-                                       font=("Segoe UI Emoji", 24))
+            # idle: 白底 + 浅灰描边 + 蓝色麦克风图标
+            self.rbtn_cv.itemconfigure(self.rbtn_circle, fill=c["bg2"], outline=c["border2"])
+            self.rbtn_cv.itemconfigure(self.rbtn_icon, text="🎙", fill=c["accent"],
+                                       font=("Segoe UI Emoji", 22))
             for p in self._pulses: self.rbtn_cv.itemconfigure(p, state="hidden")
             self.rbtn_cv.itemconfigure(self._breath, state="hidden")
             for b in self._sp_bars: self.sp_cv.itemconfigure(b, state="hidden")
             self.rbtn_hint.configure(text="按住说话", fg=c["fg2"])
-            self.key_pill.configure(text=" Right Ctrl ", fg=c["accent"], bg=c["card"])
+            self.key_pill.configure(text=" Right Ctrl ", fg=c["fg"], bg=c["card2"])
             self._press_anim = None
 
     def _animate(self):
@@ -1472,14 +1497,14 @@ class MainWindow:
                 except Exception: pass
             self._draw_spectrum(history)
             # 状态点呼吸
-            r2 = 5 + 1.2 * abs(math.sin(t * 2))
-            self.dot_cv.coords(self.dot_id, 7 - r2, 7 - r2, 7 + r2, 7 + r2)
+            r2 = 4 + 0.8 * abs(math.sin(t * 2))
+            self.dot_cv.coords(self.dot_id, 5 - r2, 5 - r2, 5 + r2, 5 + r2)
         else:
-            # 频谱条归零 (从外到内逐根收缩)
+            # 频谱条归零
             for i, bar in enumerate(self._sp_bars):
                 x0, _, x1, _ = self.sp_cv.coords(bar)
                 self.sp_cv.coords(bar, x0, 18, x1, 18)
-            self.dot_cv.coords(self.dot_id, 2, 2, 12, 12)
+            self.dot_cv.coords(self.dot_id, 1, 1, 9, 9)
         self.root.after(40, self._animate)
 
     def _apply_btn_scale(self, scale):
@@ -1488,7 +1513,7 @@ class MainWindow:
                             self._RB_CX - r, self._RB_CY - r,
                             self._RB_CX + r, self._RB_CY + r)
         # emoji 同步缩放 (用 font size)
-        font_size = max(14, int(24 * scale))
+        font_size = max(14, int(22 * scale))
         self.rbtn_cv.itemconfigure(self.rbtn_icon, font=("Segoe UI Emoji", font_size))
 
     def _draw_spectrum(self, history):
@@ -1500,16 +1525,15 @@ class MainWindow:
             h = [0.0] * (self._SP_BARS - len(h)) + h
         cy = 18  # 频谱条中心 Y
         for i, lvl in enumerate(h):
-            # 中心高两侧低 (sin 包络, 中心 1.0, 边缘 0)
             env = math.sin((i + 0.5) / self._SP_BARS * math.pi)
             lvl_s = self._level_smooth * 0.5 + lvl * 0.5  # 平滑
-            bar_h = max(2, lvl_s * self._SP_MAX_H * env * 1.6)  # 放大灵敏度
+            bar_h = max(2, lvl_s * self._SP_MAX_H * env * 1.6)
             y0 = cy - bar_h / 2
             y1 = cy + bar_h / 2
-            # 颜色: 高度 > 20 红色, > 12 黄色, 否则绿色
+            # 浅色: 高度 > 20 红, > 12 橙, 否则蓝
             if bar_h > 20: col = c["err"]
             elif bar_h > 12: col = c["warn"]
-            else: col = c["ok"]
+            else: col = c["accent"]
             self.sp_cv.coords(self._sp_bars[i],
                               self.sp_cv.coords(self._sp_bars[i])[0], y0,
                               self.sp_cv.coords(self._sp_bars[i])[2], y1)
@@ -1529,31 +1553,28 @@ class MainWindow:
         mode = state.get("audio_mode", "共享")
         guarded = state.get("mic_guarded", False)
         mtext = ""
-        if "独占" in mode: mtext += " ⓦ独占"
-        if guarded: mtext += " ⓜ麦克风独占"
+        if "独占" in mode: mtext += "  独占"
+        if guarded: mtext += "  麦克风独占"
         self.mode_lbl.configure(text=mtext)
         # 状态
         if state["recording"]:
             self._set_rec_visual(True)
             self.lbl.configure(text="录音中", fg=c["err"])
             self.dot_cv.itemconfigure(self.dot_id, fill=c["err"])
-            self.tgl.configure(text="  停止  ", bg=c["err"], fg="#ffffff",
-                               activebackground=c["err"])
-            self.eng_badge.configure(text="", bg=c["bg"])
+            self.tgl.configure(text="停止录音", fg=c["btn_fg"], bg=c["err"],
+                               activebackground="#e0352b", activeforeground=c["btn_fg"])
         elif state["enabled"]:
             self.lbl.configure(text="已启用", fg=c["fg"])
             self.dot_cv.itemconfigure(self.dot_id, fill=c["ok"])
-            self.eng_badge.configure(text="", bg=c["bg"])
+            self.tgl.configure(text="已启用", fg=c["accent"], bg="#e5f1ff",
+                               activebackground="#d0e7ff", activeforeground=c["accent"])
             self._set_rec_visual(False)
-            self.tgl.configure(text="  禁用  ", bg=c["card"], fg=c["fg2"],
-                               activebackground=c["card2"])
         else:
             self.lbl.configure(text="已禁用", fg=c["fg3"])
             self.dot_cv.itemconfigure(self.dot_id, fill=c["fg3"])
-            self.eng_badge.configure(text="", bg=c["bg"])
+            self.tgl.configure(text="已禁用", fg=c["fg2"], bg=c["card2"],
+                               activebackground=c["border"], activeforeground=c["fg"])
             self._set_rec_visual(False)
-            self.tgl.configure(text="  启用  ", bg=c["ok"], fg=c["bg"],
-                               activebackground="#b4e08a")
 
     def _poll(self):
         try:
@@ -1569,7 +1590,7 @@ class MainWindow:
                 elif k == "error":
                     self.txt.configure(state=tk.NORMAL)
                     self.txt.delete("1.0", tk.END)
-                    self.txt.insert("1.0", "❌  " + m[1], "error")
+                    self.txt.insert("1.0", "⚠  " + m[1], "error")
                     self.txt.configure(state=tk.DISABLED)
                 elif k == "toggled": self._refresh(); self._update_tray()
                 elif k == "show": self.root.deiconify(); self.root.lift()
@@ -1581,11 +1602,11 @@ class MainWindow:
     def _copy_result(self):
         try:
             content = self.txt.get("1.0", tk.END).strip()
-            if content and content != "等待语音输入…":
+            if content and content != "等待语音输入":
                 pyperclip.copy(content)
                 # 短暂反馈
                 old = self.copy_btn.cget("text")
-                self.copy_btn.configure(text="✓  已复制", fg=self.c["ok"])
+                self.copy_btn.configure(text="已复制", fg=self.c["ok"])
                 self.root.after(1200, lambda: self.copy_btn.configure(text=old, fg=self.c["fg2"]))
                 log(f"复制结果: {content[:30]}...")
         except Exception as e:
@@ -1618,89 +1639,167 @@ class MainWindow:
 
 
 # ═══════════════════════════════════════════════════════════
-#  设置窗口 (API + 音频设备)
+#  设置窗口 (v0.6.0 浅色系)
+#  Why: v5.0 深色 ttk 样式在某些 Windows 主题下渲染异常, 表现为"一片空白".
+#  修复策略: 自定义白底 + 浅灰 + 蓝色 tab 样式, 移除对系统主题的依赖.
 # ═══════════════════════════════════════════════════════════
 class SettingsDialog:
     def __init__(self, parent, main_win):
         self.mw = main_win
         c = main_win.c
+        # 避免重复打开 (防止用户连点设置按钮产生多个窗口)
+        if hasattr(main_win, "_settings_win") and main_win._settings_win is not None:
+            try:
+                main_win._settings_win.lift(); main_win._settings_win.focus_force()
+                return
+            except Exception: pass
         self.win = tk.Toplevel(parent)
         self.win.title("设置 — 言栖")
         self.win.resizable(False, False)
         self.win.configure(bg=c["bg"])
         self.win.transient(parent)
+        self.win.attributes("-topmost", True)
+        main_win._settings_win = self.win
+        self.win.protocol("WM_DELETE_WINDOW", self._on_close)
+        # 定位: 主窗口右侧, 主窗口居中或不在屏幕内时 fallback 到屏幕中
+        try:
+            px, py = parent.winfo_rootx(), parent.winfo_rooty()
+            pw = parent.winfo_width()
+            w, h = 480, 540
+            self.win.geometry(f"{w}x{h}+{px + pw + 8}+{py}")
+        except Exception:
+            self.win.geometry("480x540")
+        self.win.update_idletasks()
         self.win.grab_set()
-        # 定位在主窗口右侧, 一次设置 size + position (分开调 geometry 后一次会覆盖前一次)
-        px, py = parent.winfo_x(), parent.winfo_y()
-        pw = parent.winfo_width()
-        self.win.geometry(f"480x500+{px + pw + 8}+{py}")
-        # 自定义 Notebook 样式 (深色)
+        # 自定义 Notebook 样式 (浅色: 蓝条 + 白底)
         style = ttk.Style()
-        style.theme_use("clam")
-        style.configure("TNotebook", background=c["bg"], borderwidth=0)
-        style.configure("TNotebook.Tab", background=c["bg2"], foreground=c["fg2"],
-                        padding=(16, 8), font=("Microsoft YaHei UI", 9), borderwidth=0)
+        try: style.theme_use("clam")
+        except Exception: pass
+        style.configure("TNotebook", background=c["bg"], borderwidth=0, tabmargins=(0, 0, 0, 0))
+        style.configure("TNotebook.Tab",
+                        background=c["card2"], foreground=c["fg2"],
+                        padding=(18, 10), font=("Microsoft YaHei UI", 9),
+                        borderwidth=0)
         style.map("TNotebook.Tab",
-                  background=[("selected", c["card"]), ("active", c["card2"])],
+                  background=[("selected", c["bg"]), ("active", c["border"])],
                   foreground=[("selected", c["accent"]), ("active", c["fg"])])
         style.configure("TFrame", background=c["bg"])
+        # 浅色下 ttk 默认 Label/LabelFrame 也得改背景
+        style.configure("TLabel", background=c["bg"], foreground=c["fg"])
+        # 顶部分隔
+        tk.Frame(self.win, bg=c["border"], height=1).pack(side=tk.TOP, fill=tk.X, padx=20, pady=(16, 0))
+        # Notebook
         nb = ttk.Notebook(self.win)
-        nb.pack(fill=tk.BOTH, expand=True, padx=14, pady=(14, 8))
+        nb.pack(fill=tk.BOTH, expand=True, padx=20, pady=(0, 0))
+        # ── 通用 tab
         nb.add(self._general_tab(nb), text="  通用  ")
+        # ── 音频 tab
         nb.add(self._audio_tab(nb), text="  音频设备  ")
-        # 底栏提示
-        tk.Label(self.win, text="设置修改后立即生效",
-                 font=("Microsoft YaHei UI", 8), fg=c["fg3"], bg=c["bg"]).pack(pady=(0, 12))
+        # 底部分隔
+        tk.Frame(self.win, bg=c["border"], height=1).pack(side=tk.TOP, fill=tk.X, padx=20, pady=(0, 0))
+        # 底栏
+        bot = tk.Frame(self.win, bg=c["bg"])
+        bot.pack(side=tk.TOP, fill=tk.X, padx=20, pady=10)
+        tk.Label(bot, text="设置修改后立即生效", font=("Microsoft YaHei UI", 8),
+                 fg=c["fg3"], bg=c["bg"]).pack(side=tk.LEFT)
+        close_btn = tk.Button(bot, text="完成", font=("Microsoft YaHei UI", 9, "bold"),
+                              fg=c["btn_fg"], bg=c["accent"], activebackground="#0055aa",
+                              activeforeground=c["btn_fg"], relief=tk.FLAT, cursor="hand2",
+                              bd=0, highlightthickness=0, padx=18, pady=4,
+                              command=self._on_close)
+        close_btn.pack(side=tk.RIGHT)
+
+    def _on_close(self):
+        try: self.win.grab_release()
+        except Exception: pass
+        self.mw._settings_win = None
+        self.win.destroy()
+
+    def _section_label(self, parent, text, hint=""):
+        """分组小标题: 浅色无圆点, 配下方小灰字提示"""
+        c = self.mw.c
+        f = tk.Frame(parent, bg=c["bg"])
+        f.pack(fill=tk.X, pady=(14, 6), anchor=tk.W)
+        tk.Label(f, text=text, font=("Microsoft YaHei UI", 11, "bold"),
+                 fg=c["fg"], bg=c["bg"], anchor=tk.W).pack(side=tk.LEFT)
+        if hint:
+            tk.Label(f, text="  " + hint, font=("Microsoft YaHei UI", 8),
+                     fg=c["fg3"], bg=c["bg"]).pack(side=tk.LEFT)
+
+    def _setting_row(self, parent, title, description, var, on_toggle, on_color="accent"):
+        """一行设置: 标题 + 描述 + toggle (Switch 风格 checkbox).
+        返回 (frame, var) 以便调用方后续读取 var 状态."""
+        c = self.mw.c
+        card = tk.Frame(parent, bg=c["card"], highlightthickness=1, highlightbackground=c["border"])
+        card.pack(fill=tk.X, pady=4)
+        # 左侧: 标题 + 描述
+        txt_frame = tk.Frame(card, bg=c["card"])
+        txt_frame.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=14, pady=10)
+        tk.Label(txt_frame, text=title, font=("Microsoft YaHei UI", 10, "bold"),
+                 fg=c["fg"], bg=c["card"], anchor=tk.W, justify=tk.LEFT).pack(anchor=tk.W)
+        if description:
+            tk.Label(txt_frame, text=description, font=("Microsoft YaHei UI", 8),
+                     fg=c["fg2"], bg=c["card"], anchor=tk.W, justify=tk.LEFT,
+                     wraplength=320).pack(anchor=tk.W, pady=(2, 0))
+        # 右侧: Switch 风格 checkbox
+        sw = tk.Checkbutton(card, variable=var, command=on_toggle,
+                            font=("Segoe UI Symbol", 14), bd=0, cursor="hand2",
+                            selectcolor=c["card2"], activebackground=c["card"],
+                            bg=c["card"], activeforeground=c[on_color],
+                            fg=c["border2"], relief=tk.FLAT, padx=8, pady=4)
+        sw.pack(side=tk.RIGHT)
+        return card
 
     def _general_tab(self, p):
         c = self.mw.c
-        f = tk.Frame(p, bg=c["bg"], padx=4, pady=4)
-        # 开机启动
-        self._section_label(f, "开机启动", "accent")
-        card = tk.Frame(f, bg=c["card"], highlightthickness=1, highlightbackground=c["border"])
-        card.pack(fill=tk.X, pady=(4, 0))
+        f = tk.Frame(p, bg=c["bg"])
+        f.pack(fill=tk.BOTH, expand=True, padx=4, pady=4)
+        # 启动 / 行为
+        self._section_label(f, "启动", "登录后是否自动进入")
         self.auto_start_var = tk.BooleanVar(value=config.get("auto_start", True))
-        cb = tk.Checkbutton(
-            card, text="开机时自动启动 (登录后直接进托盘)",
-            variable=self.auto_start_var,
-            font=("Microsoft YaHei UI", 10), fg=c["fg"], bg=c["card"],
-            selectcolor=c["card2"], activebackground=c["card2"], activeforeground=c["fg"],
-            bd=0, highlightthickness=0, cursor="hand2", padx=10, pady=8,
-            command=self._auto_start_toggle)
-        cb.pack(anchor=tk.W)
+        self._setting_row(f, "开机时自动启动",
+                          "登录 Windows 后自动启动, 静默进入托盘",
+                          self.auto_start_var, self._auto_start_toggle)
         if not getattr(sys, "frozen", False):
             tk.Label(f, text="⚠ 当前为开发模式, 注册表项不会写入 (打包后才生效)",
                      font=("Microsoft YaHei UI", 8), fg=c["warn"], bg=c["bg"],
-                     justify=tk.LEFT).pack(anchor=tk.W, pady=(10, 0))
+                     justify=tk.LEFT).pack(anchor=tk.W, pady=(4, 0))
         else:
             status = "已注册到 HKCU\\...\\Run" if is_auto_start_enabled() else "未注册"
             tk.Label(f, text=f"当前状态: {status}",
                      font=("Microsoft YaHei UI", 8), fg=c["fg3"], bg=c["bg"],
-                     justify=tk.LEFT).pack(anchor=tk.W, pady=(10, 0))
+                     justify=tk.LEFT).pack(anchor=tk.W, pady=(4, 0))
 
-        # 录音时独占设备
-        self._section_label(f, "录音隐私", "accent2")
-        card2 = tk.Frame(f, bg=c["card"], highlightthickness=1, highlightbackground=c["border"])
-        card2.pack(fill=tk.X, pady=(4, 0))
+        # 隐私
+        self._section_label(f, "录音隐私", "是否阻止其他 App 旁听")
         self.exclusive_var = tk.BooleanVar(value=config.get("exclusive_device", True))
-        cb2 = tk.Checkbutton(
-            card2, text="录音时独占设备 (推荐开启)",
-            variable=self.exclusive_var,
-            font=("Microsoft YaHei UI", 10), fg=c["fg"], bg=c["card"],
-            selectcolor=c["card2"], activebackground=c["card2"], activeforeground=c["fg"],
-            bd=0, highlightthickness=0, cursor="hand2", padx=10, pady=4,
-            command=self._exclusive_toggle)
-        cb2.pack(anchor=tk.W)
-        tk.Label(card2,
-                 text=("  开启: 录音时切换系统默认麦克风, 阻止其他 App (Discord / QQ / 飞书)\n"
-                       "        获取您的声音; 同时尝试 WASAPI 独占流。\n"
-                       "  关闭: 与其他 App 共享麦克风, 互不干扰 (适合多人协作或会议场景)。"),
-                 font=("Microsoft YaHei UI", 8), fg=c["fg3"], bg=c["card"],
-                 justify=tk.LEFT, padx=10, pady=(0, 8)).pack(anchor=tk.W)
+        self._setting_row(f, "录音时独占设备",
+                          "开启: 切走默认麦克风 + WASAPI 独占 (推荐)\n"
+                          "关闭: 共享模式, 适合多人协作 / 会议场景",
+                          self.exclusive_var, self._exclusive_toggle)
+
+        # 悬浮气泡 (v0.7.0 预留)
+        self._section_label(f, "桌面", "关闭主窗口后是否留在桌面上")
+        self.bubble_var = tk.BooleanVar(value=config.get("floating_bubble", True))
+        self._setting_row(f, "悬浮气泡",
+                          "关闭主窗口后, 在桌面显示一个小气泡\n"
+                          "气泡状态反映当前功能 (待命/录音中/已关闭)",
+                          self.bubble_var, self._bubble_toggle)
+
+        # 关于区块
+        self._section_label(f, "关于", "")
+        info_card = tk.Frame(f, bg=c["card"], highlightthickness=1, highlightbackground=c["border"])
+        info_card.pack(fill=tk.X, pady=4)
+        tk.Label(info_card, text="言栖 v0.5.0 (pre-release)", font=("Microsoft YaHei UI", 10, "bold"),
+                 fg=c["fg"], bg=c["card"]).pack(anchor=tk.W, padx=14, pady=(10, 0))
+        tk.Label(info_card, text="本地离线识别 · sherpa-onnx + SenseVoice",
+                 font=("Microsoft YaHei UI", 8), fg=c["fg2"], bg=c["card"]).pack(anchor=tk.W, padx=14, pady=(2, 0))
+        link = tk.Label(info_card, text="github.com/Xinyang-S/STT-YanQi",
+                        font=("Consolas", 8), fg=c["accent"], bg=c["card"], cursor="hand2")
+        link.pack(anchor=tk.W, padx=14, pady=(2, 10))
         return f
 
     def _auto_start_toggle(self):
-        """勾选/取消开机启动, 立即写注册表 + 持久化到 config"""
         enabled = self.auto_start_var.get()
         config["auto_start"] = enabled
         set_auto_start(enabled)
@@ -1708,42 +1807,28 @@ class SettingsDialog:
         log(f"用户切换开机启动: {enabled}")
 
     def _exclusive_toggle(self):
-        """勾选/取消独占设备, 立即持久化"""
         enabled = self.exclusive_var.get()
         config["exclusive_device"] = enabled
         save_config()
         log(f"用户切换独占设备: {enabled}")
 
-    def _mk_entry_row(self, parent, label, key_dict, key_name, show="", accent="accent"):
-        """一行: 标签 + 输入框, 返回 Entry"""
-        c = self.mw.c
-        row = tk.Frame(parent, bg=c["bg"])
-        row.pack(fill=tk.X, pady=4)
-        tk.Label(row, text=label, font=("Microsoft YaHei UI", 9), fg=c["fg2"],
-                 bg=c["bg"], width=12, anchor=tk.W).pack(side=tk.LEFT)
-        container = tk.Frame(row, bg=c["card"], highlightthickness=1,
-                             highlightbackground=c["border"])
-        container.pack(side=tk.LEFT, fill=tk.X, expand=True)
-        e = tk.Entry(container, font=("Consolas", 9), show=show, relief=tk.FLAT,
-                     bg=c["card"], fg=c["fg"], insertbackground=c[accent],
-                     bd=0, highlightthickness=0)
-        e.insert(0, key_dict.get(key_name, ""))
-        e.pack(fill=tk.X, padx=8, pady=6)
-        return e
-
-    def _section_label(self, parent, text, color_key="accent"):
-        """分组小标题"""
-        c = self.mw.c
-        f = tk.Frame(parent, bg=c["bg"])
-        f.pack(fill=tk.X, pady=(10, 4))
-        tk.Label(f, text="●", font=("Arial", 10), fg=c[color_key], bg=c["bg"]).pack(side=tk.LEFT, padx=(0, 6))
-        tk.Label(f, text=text, font=("Microsoft YaHei UI", 10, "bold"),
-                 fg=c["fg"], bg=c["bg"]).pack(side=tk.LEFT)
+    def _bubble_toggle(self):
+        enabled = self.bubble_var.get()
+        config["floating_bubble"] = enabled
+        save_config()
+        log(f"用户切换悬浮气泡: {enabled}")
+        # v0.7.0 会在此接入 FloatingBubble.show()/hide()
+        if hasattr(self.mw, "bubble") and self.mw.bubble is not None:
+            try:
+                if enabled: self.mw.bubble.show()
+                else: self.mw.bubble.hide()
+            except Exception as e: log(f"气泡同步失败: {e!r}")
 
     def _audio_tab(self, p):
         c = self.mw.c
-        f = tk.Frame(p, bg=c["bg"], padx=4, pady=4)
-        self._section_label(f, "选择麦克风  (即时生效)", "accent")
+        f = tk.Frame(p, bg=c["bg"])
+        f.pack(fill=tk.BOTH, expand=True, padx=4, pady=4)
+        self._section_label(f, "选择麦克风", "设置后立即生效")
         devs = AudioRecorder.list_devices()
         self.dv = tk.StringVar(); self.dm = {}
         for idx, name, is_def in devs:
@@ -1751,13 +1836,12 @@ class SettingsDialog:
             self.dm[lb] = idx
             if idx == config.get("input_device_index"): self.dv.set(lb)
             elif is_def and config.get("input_device_index") is None: self.dv.set(lb)
-        # 卡片化设备列表
         if devs:
-            list_frame = tk.Frame(f, bg=c["card"], highlightthickness=1,
-                                  highlightbackground=c["border"])
-            list_frame.pack(fill=tk.BOTH, expand=True, pady=(4, 0))
-            for lb in self.dm:
-                row = tk.Frame(list_frame, bg=c["card"])
+            list_card = tk.Frame(f, bg=c["card"], highlightthickness=1,
+                                 highlightbackground=c["border"])
+            list_card.pack(fill=tk.BOTH, expand=True, pady=4)
+            for lb, idx in self.dm.items():
+                row = tk.Frame(list_card, bg=c["card"])
                 row.pack(fill=tk.X, padx=2, pady=2)
                 rb = tk.Radiobutton(row, text="  " + lb, variable=self.dv, value=lb,
                                     fg=c["fg"], bg=c["card"], selectcolor=c["card2"],
@@ -1765,16 +1849,14 @@ class SettingsDialog:
                                     font=("Microsoft YaHei UI", 9), anchor=tk.W,
                                     cursor="hand2", bd=0, highlightthickness=0,
                                     command=self._dev_save)
-                rb.pack(fill=tk.X, padx=4, pady=4)
+                rb.pack(fill=tk.X, padx=10, pady=6)
             hint_text = "录音时"
             if config.get("exclusive_device", True):
-                hint_text += "自动尝试 WASAPI 独占 + 切换系统默认麦克风\n按住 Right Ctrl 期间, 其他 app 听不到您的声音"
+                hint_text += "自动尝试 WASAPI 独占 + 切换系统默认麦克风, 其他 App 听不到您的声音"
             else:
-                hint_text += "使用共享模式, 其他 app 也能正常获取音频"
-            hint = tk.Label(f, text=hint_text,
-                            font=("Microsoft YaHei UI", 8), fg=c["fg3"], bg=c["bg"],
-                            justify=tk.LEFT)
-            hint.pack(anchor=tk.W, pady=(10, 0))
+                hint_text += "使用共享模式, 其他 App 也能正常获取音频"
+            tk.Label(f, text=hint_text, font=("Microsoft YaHei UI", 8),
+                     fg=c["fg3"], bg=c["bg"], justify=tk.LEFT, wraplength=420).pack(anchor=tk.W, pady=(8, 0))
         else:
             tk.Label(f, text="未检测到麦克风", font=("Microsoft YaHei UI", 10),
                      fg=c["err"], bg=c["bg"]).pack(pady=20)
