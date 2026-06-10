@@ -1232,7 +1232,7 @@ def _tray_icon_for(state_name):
     elif state_name == "off":
         bg = (156, 163, 175, 255)   # 禁用灰
     else:
-        bg = (59, 91, 219, 255)     # 待命蓝 (与主按钮同色)
+        bg = (22, 163, 74, 255)      # 待命绿 #16a34a (与 c["ok"] 同色)
     if base is None:
         return _make_fallback_icon(bg)
     # 鸟图贴在背景圆上: 64x64 透明底, 先画背景圆, 再居中贴鸟
