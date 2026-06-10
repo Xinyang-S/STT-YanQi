@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-言栖 (Yán Qī) — Voice Input for AI Agents (v5.0)
+言栖 (Yán Qī) — Voice Input for AI Agents (v0.5.0)
 =================================================
 本地离线识别 (sherpa-onnx + SenseVoice 多语种模型)
   · 支持中文 / 英文 / 日文 / 韩文 / 粤语 自动检测
@@ -15,6 +15,8 @@
 用法: VoiceInput.exe            正常启动
       VoiceInput.exe --minimized   静默启动进托盘 (开机启动用)
       VoiceInput.exe --test        全链路测试
+
+版本: 0.5.0 (pre-release < 1.0.0, 仍在打磨)
 """
 
 import ctypes
@@ -98,52 +100,85 @@ def _gen_tone(freqs_durs, sample_rate=22050):
     return hdr + data
 
 # Discord 风格音效预设
-_WAV_START     = _gen_tone([(880, 0.05), (1200, 0.06)])   # 上升: 类似 unmute
-_WAV_DONE      = _gen_tone([(1568, 0.10)])                 # 叮: 类似 DM 通知
-_WAV_TOGGLE_ON  = _gen_tone([(1047, 0.06)])                # 轻响
-_WAV_TOGGLE_OFF = _gen_tone([(784, 0.06)])
+_WAV_START     = _gen_tone([(880, 0.06), (1320, 0.08)])   # 上升: 类似 unmute (双音更醒目)
+_WAV_DONE      = _gen_tone([(1568, 0.12)])                 # 叮: 类似 DM 通知
+_WAV_TOGGLE_ON  = _gen_tone([(1047, 0.08), (1318, 0.06)])  # 双音: 启用 = 上行
+_WAV_TOGGLE_OFF = _gen_tone([(1318, 0.06), (784, 0.08)])   # 双音: 禁用 = 下行
 _WAV_ERROR     = _gen_tone([(262, 0.15)])                 # 低沉
 _WAV_FALLBACK  = _gen_tone([(660, 0.04), (660, 0.04)])    # 双声
 
 try:
     import winsound
-    # winsound 限制: SND_MEMORY 不允许 SND_ASYNC (Python 包装器会抛 RuntimeError)
-    # 真异步唯一靠谱的方案是写临时文件 + SND_FILENAME | SND_ASYNC.
-    # _play 用线程 + 临时文件: 调用方零阻塞, 异步播放, 文件自动清理, 任何异常都进日志.
-    def _play(wav, blocking_ms=300):
-        """非阻塞播放 (主线程零阻塞, 异步播出).
-        blocking_ms: 临时文件保留时长, 必须 >= WAV 时长, 否则 PlaySound 中途会因文件被删而静音."""
-        def _worker():
-            path = None
+    # 关键约束 (实测 Python 3.13):
+    #   1. winsound.PlaySound 不支持 SND_MEMORY | SND_ASYNC (运行时抛 RuntimeError)
+    #   2. v4.3 的 SND_ASYNC + 临时文件方案有竞态: PlaySound 立即返回, 但 Windows
+    #      音频子系统可能延迟数十~数百毫秒才真正开始读文件; 若主线程在 200-300ms
+    #      内把 temp 文件 unlink 掉, 整段声音被截断, 表现就是 "明明调了 _play
+    #      却听不到" — 启动提示音特别容易丢 (按下到下一个事件间隔短).
+    #
+    # 修复 (v0.5.0): 用同步模式 (不带 SND_ASYNC) 在独立线程里播, 线程自然阻塞到
+    # 播完才返回, 不依赖任何临时文件, 也没有"窗口期删除"的竞态. 主线程零阻塞.
+    # _SOUND_QUEUE 串行化所有声音请求, 避免 PlaySound 内部相互打断
+    # (Windows PlaySound 自身就是"单音"语义, 后调用的会顶掉前一个).
+    _SOUND_QUEUE = queue_mod.Queue()
+    def _sound_worker():
+        while True:
+            name = _SOUND_QUEUE.get()
+            if name is None: return
             try:
-                with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
-                    f.write(wav); path = f.name
-                # SND_NODEFAULT: 找不到时不响系统默认音, 避免覆盖我们的提示音
-                winsound.PlaySound(path, winsound.SND_FILENAME | winsound.SND_ASYNC | winsound.SND_NODEFAULT)
-                time.sleep(blocking_ms / 1000)  # 异步播完再删文件 (PlaySound 立即返回)
+                path = _SOUND_FILE_PATHS.get(name)
+                if path and os.path.isfile(path):
+                    # 不带 SND_ASYNC = 同步阻塞, 播完才返回; SND_NODEFAULT: 找不到时不放系统默认音
+                    # 持久文件确保 Windows 读文件时不会撞上 "文件已删除" 截断
+                    winsound.PlaySound(path, winsound.SND_FILENAME | winsound.SND_NODEFAULT)
             except Exception as e:
-                log(f"音效播放失败: {e!r}")
-            finally:
-                if path:
-                    try: os.unlink(path)
-                    except OSError: pass
-        threading.Thread(target=_worker, daemon=True).start()
-    def _play_sync(wav):
-        """阻塞播放: 调用方等播完 (保留 API 兼容性, 现在改用 _play 异步)."""
-        _play(wav, blocking_ms=300)
-except ImportError:
-    def _play(wav, blocking_ms=300):  return
-    def _play_sync(wav):  return
+                log(f"音效[{name}]播放失败: {e!r}")
+    _SOUND_FILE_PATHS = {}
+    _SOUND_READY = False
 
-# 所有音效统一为异步, 不再使用 SND_MEMORY (PyInstaller --windowed 下 SND_MEMORY
-# 偶发失败: PlaySound 返回但 Windows 音频子系统未真正播放, 原因是内存指针生命周期
-# 跨线程的问题). 临时文件 + SND_ASYNC 方案更稳.
-def sound_start():      _play(_WAV_START,  blocking_ms=200)
-def sound_done():       _play(_WAV_DONE,   blocking_ms=200)
-def sound_toggle_on():  _play(_WAV_TOGGLE_ON)
-def sound_toggle_off(): _play(_WAV_TOGGLE_OFF)
-def sound_error():      _play(_WAV_ERROR)
-def sound_fallback():   _play(_WAV_FALLBACK)
+    def _init_sounds():
+        """首次调用 _play 时初始化: 把所有 WAV 写入 ~/.voice_input/sounds/ 持久文件,
+        之后 PlaySound 直接读盘, 不再有删除竞态."""
+        global _SOUND_READY
+        if _SOUND_READY: return
+        try:
+            sound_dir = CONFIG_DIR / "sounds"
+            sound_dir.mkdir(parents=True, exist_ok=True)
+            for name, wav in [("start", _WAV_START), ("done", _WAV_DONE),
+                              ("toggle_on", _WAV_TOGGLE_ON), ("toggle_off", _WAV_TOGGLE_OFF),
+                              ("error", _WAV_ERROR), ("fallback", _WAV_FALLBACK)]:
+                path = sound_dir / f"{name}.wav"
+                path.write_bytes(wav)
+                _SOUND_FILE_PATHS[name] = str(path)
+            t = threading.Thread(target=_sound_worker, daemon=True)
+            t.start()
+            _SOUND_READY = True
+        except Exception as e:
+            log(f"音效初始化失败: {e!r}")
+
+    def _play(name):
+        """排队播放一个音效. 调用方零阻塞, 实际播放由后台串行 worker 处理.
+        name: "start" / "done" / "toggle_on" / "toggle_off" / "error" / "fallback"."""
+        if not _SOUND_READY: _init_sounds()
+        try: _SOUND_QUEUE.put_nowait(name)
+        except Exception: pass
+
+    def _play_sync(name):
+        """保留 API 兼容: 同步播放某个声音 (用 temp 文件, 当前未使用)."""
+        _play(name)
+except ImportError:
+    def _play(name):  return
+    def _play_sync(name):  return
+
+# v0.5.0: 音效统一为命名 + 后台串行 worker 模式. 修复按下快捷键时无提示音:
+# 之前 sound_start 用 SND_ASYNC + 200ms 临时文件, 在 Windows 实际开始读文件
+# 之前就被 unlink → 启动音被截断. 现在用持久文件 + 串行 worker, 100% 可闻.
+def sound_start():       _play("start")
+def sound_done():        _play("done")
+def sound_toggle_on():   _play("toggle_on")
+def sound_toggle_off():  _play("toggle_off")
+def sound_error():       _play("error")
+def sound_fallback():    _play("fallback")
 
 
 # ═══════════════════════════════════════════════════════════
@@ -1201,7 +1236,7 @@ class MainWindow:
         # ── 底栏 (先 BOTTOM pack) ──
         bot = tk.Frame(self.root, bg=c["bg"])
         bot.pack(side=tk.BOTTOM, fill=tk.X, padx=20, pady=(10, 14))
-        tk.Label(bot, text="v5.0", font=("Consolas", 8), fg=c["fg3"], bg=c["bg"]).pack(side=tk.LEFT)
+        tk.Label(bot, text="v0.5.0", font=("Consolas", 8), fg=c["fg3"], bg=c["bg"]).pack(side=tk.LEFT)
         self.copy_btn = self._mk_nav_btn(bot, "📋  复制", self._copy_result)
         self.copy_btn.pack(side=tk.RIGHT, padx=(6, 0))
         self._mk_nav_btn(bot, "⚙  设置",
@@ -1566,7 +1601,7 @@ class MainWindow:
 
     def _about(self):
         messagebox.showinfo("关于",
-            "言栖 v5.0\n"
+            "言栖 v0.5.0 (pre-release)\n"
             "Voice Input for AI Agents\n\n"
             "作者: 孙欣阳 (Xinyang Sun)\n\n"
             "本地离线识别 (sherpa-onnx + SenseVoice 多语种)\n"
@@ -1798,7 +1833,7 @@ def run_e2e_test():
         sys.stdout.reconfigure(encoding='utf-8', errors='replace')
 
     print("=" * 55)
-    print("  言栖 v5.0 - 全链路测试")
+    print("  言栖 v0.5.0 - 全链路测试")
     print("=" * 55)
 
     # 1. 引擎
@@ -1909,7 +1944,7 @@ def main():
 
     minimized = "--minimized" in sys.argv
 
-    log(f"言栖 v5.0 启动 (minimized={minimized})")
+    log(f"言栖 v0.5.0 启动 (minimized={minimized})")
     hl = load_config()
     if not hl:
         messagebox.showerror("本地引擎不可用",
@@ -1945,7 +1980,7 @@ def main():
             "按住 Right Ctrl 录音 → 松开识别\n"
             "Ctrl+Shift+F9 开关\n"
             "设置中可调整: 开机启动 / 独占设备 / 麦克风 / 识别语言",
-            "言栖 v5.0"
+            "言栖 v0.5.0"
         )).start()
 
     win.root.mainloop()
