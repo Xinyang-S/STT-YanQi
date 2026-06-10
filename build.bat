@@ -30,6 +30,7 @@ python -m PyInstaller ^
     --icon=app.ico ^
     --name=VoiceInput ^
     --add-data "app.ico;." ^
+    --add-data "assets/app_icon.png;assets" ^
     --add-binary "%SHERPA_LIB%\sherpa-onnx-c-api.dll;sherpa_onnx/lib" ^
     --add-binary "%SHERPA_LIB%\sherpa-onnx-cxx-api.dll;sherpa_onnx/lib" ^
     --runtime-hook=hooks/hook-sherpa_onnx.py ^
