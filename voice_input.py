@@ -1179,6 +1179,20 @@ APP_ICO_PATH = Path(__file__).parent / "app.ico"  # 打包到 EXE 的多尺寸 .
 _brand_img = None
 _brand_img_loaded = False
 
+def _resolve_asset_path(filename):
+    """在 frozen (PyInstaller) 和开发模式下找到资源文件路径."""
+    meipass = getattr(sys, "_MEIPASS", None)
+    if meipass:
+        p = os.path.join(meipass, filename)
+        if os.path.exists(p): return p
+    if getattr(sys, "frozen", False):
+        exe_dir = os.path.dirname(sys.executable)
+        p = os.path.join(exe_dir, filename)
+        if os.path.exists(p): return p
+    p = os.path.join(os.getcwd(), filename)
+    if os.path.exists(p): return p
+    return None
+
 def _load_brand_image():
     """加载品牌图 (PNG, RGBA). 失败返回 None. 结果缓存到 _brand_img."""
     global _brand_img, _brand_img_loaded
@@ -1689,6 +1703,11 @@ class MainWindow:
         self.tray = tray_ref
         self.root = tk.Tk()
         self.root.title("言栖")
+        # 窗口图标: frozen 模式从 _MEIPASS 取, 开发模式从工作目录取
+        ico_path = _resolve_asset_path("app.ico")
+        if ico_path and os.path.exists(ico_path):
+            try: self.root.iconbitmap(default=ico_path)
+            except Exception: pass
         # v0.6.1 扁平化调色板 — 降饱和, 5 个核心色
         self.c = {
             "bg":      "#fafafa",  # 主背景 (微暖白)
@@ -2086,12 +2105,12 @@ class SettingsDialog:
         except Exception: pass
         style.configure("TNotebook", background=c["bg"], borderwidth=0, tabmargins=(0, 0, 0, 0))
         style.configure("TNotebook.Tab",
-                        background=c["card"], foreground=c["fg2"],
-                        padding=(18, 10), font=("Microsoft YaHei UI", 9),
+                        background=c["bg"], foreground=c["fg3"],
+                        padding=(16, 8), font=("Microsoft YaHei UI", 9),
                         borderwidth=0)
         style.map("TNotebook.Tab",
-                  background=[("selected", c["bg"]), ("active", c["border"])],
-                  foreground=[("selected", c["accent"]), ("active", c["fg"])])
+                  background=[("selected", c["card"]), ("active", c["bg"])],
+                  foreground=[("selected", c["accent"]), ("active", c["fg2"])])
         style.configure("TFrame", background=c["bg"])
         # 浅色下 ttk 默认 Label/LabelFrame 也得改背景
         style.configure("TLabel", background=c["bg"], foreground=c["fg"])
