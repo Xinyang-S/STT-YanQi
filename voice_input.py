@@ -1294,6 +1294,8 @@ class FloatingBubble:
         self.win = None
         self.visible = False
         self._drag_data = {"x": 0, "y": 0, "moved": False}
+        self._press_anim = None
+        self._press_anim_t = 0
         self._state_cache = None
         self._menu = None
         # 录音脉动: 3 圈, 不同相位
@@ -1311,7 +1313,11 @@ class FloatingBubble:
         try:
             self.win.attributes("-transparentcolor", self._GLASS_KEY)
         except Exception:
-            pass  # 降级: 不透明
+            pass
+        try:
+            self.win.attributes("-alpha", 0.88)  # 整体半透明 = 玻璃感
+        except Exception:
+            pass
         self.cv = tk.Canvas(self.win, width=s, height=s,
                             bg=self._GLASS_KEY, highlightthickness=0, cursor="hand2")
         self.cv.pack()
@@ -1400,6 +1406,16 @@ class FloatingBubble:
                 self.cv.coords(oval, 0, 0, 0, 0)
         self._redraw()
         self.win.after(50, self._animate)
+
+    def _trigger_press_anim(self):
+        self._press_anim = [(0, 0.92), (60, 1.06), (160, 0.98), (220, 1.0)]
+        self._press_anim_t = 0
+
+    def _apply_scale(self, scale):
+        s = self.SIZE
+        cx, cy = s // 2, s // 2
+        r = (s // 2 - 4) * scale
+        self.cv.coords(self._body, cx - r, cy - r, cx + r, cy + r)
 
     # ─────────────── 拖动 / 点击 / 右键 ───────────────
     def _on_press(self, e):
