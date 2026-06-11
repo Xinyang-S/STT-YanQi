@@ -1306,27 +1306,26 @@ class FloatingBubble:
     def _create(self):
         c = self.c
         s = self.SIZE
+        # 关键: 不用 -alpha (Windows layered window 会丢鼠标事件导致拖动失效)
+        # 玻璃感靠 Canvas 4 层堆叠模拟
         self.win = tk.Toplevel(self.root)
         self.win.overrideredirect(True)
         self.win.attributes("-topmost", True)
         self.win.geometry(f"{s}x{s}")
-        # 不再用 -transparentcolor (会让鼠标事件穿透 → 拖动失效)
-        # 改用 -alpha 0.92 玻璃感, Canvas bg 浅灰, 鼠标事件命中
-        try:
-            self.win.attributes("-alpha", 0.92)
-        except Exception:
-            pass
+        self.win.configure(bg="#e8e8ee")
         self.cv = tk.Canvas(self.win, width=s, height=s,
                             bg="#e8e8ee", highlightthickness=0, cursor="hand2")
         self.cv.pack()
-        # 外层阴影 (大圆, 极淡灰)
-        self._shadow = self.cv.create_oval(2, 4, s - 2, s - 0, fill="#e5e7eb", outline="")
-        # 玻璃主体: 白色
-        self._body = self.cv.create_oval(4, 4, s - 4, s - 4, fill="", outline="")
-        # 高光层 (玻璃反光, 顶部月牙)
-        self._highlight = self.cv.create_oval(12, 6, s - 12, s // 2 + 6,
-                                               fill="#f8f8fc", outline="")
-        # 品牌图: 中心 56x56 (v0.6.2 反馈: 46 太小了, 56 更醒目)
+        # L0 扩散阴影 (略大, 极淡)
+        self._shadow = self.cv.create_oval(0, 2, s, s + 4, fill="#d0d0d5", outline="")
+        # L1 玻璃主体 (状态色在此处反映)
+        self._body = self.cv.create_oval(3, 3, s - 3, s - 3, fill="", outline="")
+        # L2 顶部月牙高光 (玻璃反光关键)
+        self._highlight = self.cv.create_oval(10, 4, s - 10, s // 2 + 4,
+                                               fill="#ffffff", outline="")
+        # L3 rim light (1px 白色描边 = 玻璃边缘折射)
+        self._rim = self.cv.create_oval(3, 3, s - 3, s - 3, fill="", outline="", width=1)
+        # L4 品牌图 (中心 56x56)
         self._photo_id = None
         self._photo_ref = None
         if _brand_img is not None:
@@ -1335,24 +1334,22 @@ class FloatingBubble:
             bird.thumbnail((56, 56), Image.LANCZOS)
             self._photo_ref = ImageTk.PhotoImage(bird)
             self._photo_id = self.cv.create_image(s // 2, s // 2, image=self._photo_ref)
-        # 录音脉冲环: 柔和色调 (#fca5a5 / #fecaca / #fee2e2) — 不要浓
+        # 录音态: 中心 ■ 方块 (强调"正在录")
+        self._rec_dot = self.cv.create_rectangle(s//2-10, s//2-10, s//2+10, s//2+10,
+                                                 fill="#ffffff", outline="")
+        self.cv.itemconfigure(self._rec_dot, state="hidden")
+        # 录音脉冲环: 3 圈柔和粉红系
         pulse_colors = ["#fca5a5", "#fecaca", "#fee2e2"]
         for i in range(self._pulse_count):
             oval = self.cv.create_oval(0, 0, 0, 0, outline=pulse_colors[i], width=2)
             self.cv.itemconfigure(oval, state="hidden")
             self._pulses.append((oval, i * 0.33))
-        # 事件: 同时绑 win + cv, 防止 -alpha 区域的边缘不响应
-        for w in (self.win, self.cv):
-            w.bind("<ButtonPress-1>", self._on_press)
-            w.bind("<B1-Motion>", self._on_drag)
-            w.bind("<ButtonRelease-1>", self._on_release)
-            w.bind("<Button-3>", self._on_right_click)
-            w.bind("<Double-Button-1>", lambda e: self._show_main())
-        self._menu = tk.Menu(self.win, tearoff=0,
-                             bg=c["card"], fg=c["fg"],
-                             activebackground=c["accent"], activeforeground="#ffffff",
-                             font=("Microsoft YaHei UI", 9), relief=tk.FLAT, bd=1)
-        self.win.withdraw()
+        # 事件全部绑到 Toplevel 自身 (画布在 -alpha 模式下 hit-test 不稳)
+        self.win.bind("<ButtonPress-1>", self._on_press)
+        self.win.bind("<B1-Motion>", self._on_drag)
+        self.win.bind("<ButtonRelease-1>", self._on_release)
+        self.win.bind("<Button-3>", self._on_right_click)
+        self.win.bind("<Double-Button-1>", lambda e: self._show_main())
 
     # ─────────────── 状态 / 绘制 ───────────────
     def _current_state(self):
@@ -1369,18 +1366,27 @@ class FloatingBubble:
         if not force and sig == self._state_cache:
             return
         self._state_cache = sig
+        # 4 层玻璃配色: 主体 + 边缘 rim
         if mode == "empty":
-            # 禁用: 极淡灰白, 几乎与背景融合
-            self.cv.itemconfigure(self._body, fill="#e8eaed", outline="#cbd5e1", width=2)
-            self.cv.itemconfigure(self._highlight, state="hidden")
+            # 禁用: 极淡灰, 几乎与背景融合
+            self.cv.itemconfigure(self._body, fill="#ebedf0", outline="")
+            self.cv.itemconfigure(self._rim, outline="#cbd5e1", width=1)
+            self.cv.itemconfigure(self._highlight, fill="#f5f5f8")
         elif mode == "solid":
-            # 录音: 柔和粉红 (不要浓红), 浅红描边
-            self.cv.itemconfigure(self._body, fill="#fee2e2", outline="#fca5a5", width=2)
-            self.cv.itemconfigure(self._highlight, state="normal")
-        else:  # glass
-            # 待命: 白底 + 浅蓝描边 (不要浓蓝)
-            self.cv.itemconfigure(self._body, fill="#ffffff", outline="#bfdbfe", width=2)
-            self.cv.itemconfigure(self._highlight, state="normal")
+            # 录音: 柔和粉红 + 浅红边
+            self.cv.itemconfigure(self._body, fill="#fee2e2", outline="")
+            self.cv.itemconfigure(self._rim, outline="#fca5a5", width=2)
+            self.cv.itemconfigure(self._highlight, fill="#fafafc")
+        else:  # glass 待命
+            # 玻璃感: 白底 + 浅蓝边 + 顶部月牙高光
+            self.cv.itemconfigure(self._body, fill="#ffffff", outline="")
+            self.cv.itemconfigure(self._rim, outline="#bfdbfe", width=2)
+            self.cv.itemconfigure(self._highlight, fill="#fafafc")
+        # 录音态: 品牌图隐藏, 改显示 ■ 方块
+        if hasattr(self, "_photo_id") and self._photo_id is not None:
+            self.cv.itemconfigure(self._photo_id, state="hidden" if mode == "solid" else "normal")
+        if hasattr(self, "_rec_dot"):
+            self.cv.itemconfigure(self._rec_dot, state="normal" if mode == "solid" else "hidden")
         for oval, _ in self._pulses:
             self.cv.itemconfigure(oval, state="normal" if pulsing else "hidden")
 
@@ -1428,8 +1434,15 @@ class FloatingBubble:
         dy = e.y_root - self._drag_data["y"]
         if abs(dx) + abs(dy) > self.CLICK_THRESHOLD:
             self._drag_data["moved"] = True
+        if not self._drag_data["moved"]:
+            return
         x = self.win.winfo_x() + dx
         y = self.win.winfo_y() + dy
+        # 屏幕边界保护: 至少 5px 在屏内
+        sw = self.root.winfo_screenwidth()
+        sh = self.root.winfo_screenheight()
+        x = max(0, min(x, sw - self.SIZE))
+        y = max(0, min(y, sh - self.SIZE))
         self.win.geometry(f"+{x}+{y}")
         self._drag_data["x"] = e.x_root
         self._drag_data["y"] = e.y_root
