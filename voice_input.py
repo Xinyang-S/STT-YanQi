@@ -1306,8 +1306,7 @@ class FloatingBubble:
     def _create(self):
         c = self.c
         s = self.SIZE
-        # 关键: 不用 -alpha (Windows layered window 会丢鼠标事件)
-        # 用 -transparentcolor 把 toplevel 4 角变透明 → 看起来是圆形
+        # v0.6.6 高级玻璃感: 8 层 Canvas 堆叠 + PIL 渐变图
         self.win = tk.Toplevel(self.root)
         self.win.overrideredirect(True)
         self.win.attributes("-topmost", True)
@@ -1321,90 +1320,135 @@ class FloatingBubble:
         self.cv = tk.Canvas(self.win, width=s, height=s,
                             bg=self._TRANSPARENT_KEY, highlightthickness=0, cursor="hand2")
         self.cv.pack()
-        # L0 扩散阴影 (极淡, 模拟浮动)
-        self._shadow = self.cv.create_oval(2, 4, s - 2, s + 2, fill="#d0d0d5", outline="")
-        # L1 玻璃主体: 圆撑满 (留 2px 给 transparent 角)
+        # L0 远距扩散阴影 (大, 极淡)
+        self._shadow_outer = self.cv.create_oval(-6, 0, s + 6, s + 10,
+                                                   fill="#dadce0", outline="")
+        # L1 中距阴影 (略深)
+        self._shadow_inner = self.cv.create_oval(0, 2, s, s + 6,
+                                                   fill="#d0d2d7", outline="")
+        # L2 玻璃主体 (状态色 fill)
         self._body = self.cv.create_oval(2, 2, s - 2, s - 2, fill="", outline="")
-        # L2 顶部月牙高光
-        self._highlight = self.cv.create_oval(10, 4, s - 10, s // 2 + 4,
-                                               fill="#ffffff", outline="")
-        # L3 rim light (1px 描边)
-        self._rim = self.cv.create_oval(2, 2, s - 2, s - 2, fill="", outline="", width=1)
-        # L4 品牌图 (中心 56x56)
+        # L3 状态色 tint (PIL 渐变)
+        self._tint_id = self.cv.create_image(s//2, s//2, image="")
+        self._glass_tints = {}
+        for theme, color in [("glass", "#bfdbfe"), ("solid", "#fca5a5"), ("empty", "#cbd5e1")]:
+            self._glass_tints[theme] = self._make_tint(s, color)
+        # L4 顶部 specular 高光 (PIL 渐变)
+        self._specular_id = self.cv.create_image(s//2, s//2 - 6, image="")
+        self._specular_photo = self._make_specular(s)
+        # L5 内凹暗影 (玻璃厚度)
+        self._inner_shadow = self.cv.create_oval(3, 3, s - 3, s - 3,
+                                                   fill="", outline="#d8dade", width=1)
+        # L6 顶部 + 底部 rim (玻璃边缘折射)
+        self._rim_top = self.cv.create_arc(3, 3, s - 3, s - 3, start=200, extent=140,
+                                           style=tk.ARC, outline="#ffffff", width=1)
+        self._rim_bottom = self.cv.create_arc(3, 3, s - 3, s - 3, start=20, extent=140,
+                                              style=tk.ARC, outline="#d4d6da", width=1)
+        # L7 品牌图 (中心 60x60)
         self._photo_id = None
         self._photo_ref = None
         if _brand_img is not None:
             from PIL import ImageTk
             bird = _brand_img.copy()
-            bird.thumbnail((56, 56), Image.LANCZOS)
+            bird.thumbnail((60, 60), Image.LANCZOS)
             self._photo_ref = ImageTk.PhotoImage(bird)
             self._photo_id = self.cv.create_image(s // 2, s // 2, image=self._photo_ref)
         # 录音态: 中心 ■ 方块
-        self._rec_dot = self.cv.create_rectangle(s//2-10, s//2-10, s//2+10, s//2+10,
+        self._rec_dot = self.cv.create_rectangle(s//2-11, s//2-11, s//2+11, s//2+11,
                                                  fill="#ffffff", outline="")
         self.cv.itemconfigure(self._rec_dot, state="hidden")
         # 录音脉冲环: 3 圈柔和粉红系
-        pulse_colors = ["#fca5a5", "#fecaca", "#fee2e2"]
+        pulse_colors = ["#f87171", "#fca5a5", "#fecaca"]
         for i in range(self._pulse_count):
             oval = self.cv.create_oval(0, 0, 0, 0, outline=pulse_colors[i], width=2)
             self.cv.itemconfigure(oval, state="hidden")
             self._pulses.append((oval, i * 0.33))
-        # 拖动: 用 <Motion> 事件 + _pressed 标志, B1-Motion 在 borderless toplevel 上常丢
+        # 拖动用 <Motion>
         self._pressed = False
         self.win.bind("<ButtonPress-1>", self._on_press)
         self.win.bind("<ButtonRelease-1>", self._on_release)
         self.win.bind("<Motion>", self._on_motion)
         self.win.bind("<Button-3>", self._on_right_click)
         self.win.bind("<Double-Button-1>", lambda e: self._show_main())
-        
-        pulse_colors = ["#fca5a5", "#fecaca", "#fee2e2"]
-        for i in range(self._pulse_count):
-            oval = self.cv.create_oval(0, 0, 0, 0, outline=pulse_colors[i], width=2)
-            self.cv.itemconfigure(oval, state="hidden")
-            self._pulses.append((oval, i * 0.33))
-        # 事件全部绑到 Toplevel 自身 (画布在 -alpha 模式下 hit-test 不稳)
-        self.win.bind("<ButtonPress-1>", self._on_press)
-        # <B1-Motion> removed, use <Motion> + _pressed flag
-        self.win.bind("<ButtonRelease-1>", self._on_release)
-        self.win.bind("<Button-3>", self._on_right_click)
-        self.win.bind("<Double-Button-1>", lambda e: self._show_main())
 
-    # ─────────────── 状态 / 绘制 ───────────────
+    def _make_tint(self, s, color):
+        """生成状态色径向渐变 (中心实 -> 边缘透明) — 模拟玻璃的彩色光晕."""
+        from PIL import Image, ImageTk
+        r, g, b = int(color[1:3], 16), int(color[3:5], 16), int(color[5:7], 16)
+        im = Image.new("RGBA", (s, s), (0, 0, 0, 0))
+        for y in range(s):
+            for x in range(s):
+                dx, dy = x - s//2, y - s//2
+                d = (dx*dx + dy*dy) ** 0.5
+                if d < s * 0.42:
+                    a = int(100 * (1 - d / (s * 0.42)) ** 2.2)
+                    if a > 0:
+                        im.putpixel((x, y), (r, g, b, a))
+        return ImageTk.PhotoImage(im)
+
+    def _make_specular(self, s):
+        """生成顶部月牙形 specular 高光 (白 -> 透明, 渐变)."""
+        from PIL import Image, ImageTk
+        im = Image.new("RGBA", (s, s), (0, 0, 0, 0))
+        for y in range(s // 2 + 4):
+            for x in range(s):
+                dx = x - s//2
+                # 月牙形: 中间宽, 边缘窄
+                if abs(dx) < s * 0.32:
+                    edge_fall = 1.0 - (abs(dx) / (s * 0.32)) ** 1.2
+                    a = int(180 * edge_fall * max(0, 1 - y / (s // 2)) ** 1.5)
+                    if a > 0:
+                        im.putpixel((x, y), (255, 255, 255, a))
+        return ImageTk.PhotoImage(im)
+
     def _current_state(self):
+        """从 state[] 推导出当前视觉状态: 模式 / 颜色 / 是否脉冲."""
         c = self.c
         if not state["enabled"]:
-            return ("empty", c["off"], False)       # 禁用: 极淡灰
+            return ("empty", c["off"], False)
         if state["recording"]:
-            return ("solid", c["rec"], True)         # 录音: 红底 + 脉冲
-        return ("glass", c["accent"], False)          # 待命: 玻璃感蓝
+            return ("solid", c["rec"], True)
+        return ("glass", c["accent"], False)
 
     def _redraw(self, force=False):
+        """根据 state 切 4 个核心视觉元素: body / tint / specular / pulses."""
         mode, color, pulsing = self._current_state()
         sig = (mode, color, pulsing)
         if not force and sig == self._state_cache:
             return
         self._state_cache = sig
-        # 4 层玻璃配色: 主体 + 边缘 rim
+        c = self.c
         if mode == "empty":
-            # 禁用: 极淡灰, 几乎与背景融合
-            self.cv.itemconfigure(self._body, fill="#ebedf0", outline="")
-            self.cv.itemconfigure(self._rim, outline="#cbd5e1", width=1)
-            self.cv.itemconfigure(self._highlight, fill="#f5f5f8")
+            # 禁用: 极淡灰
+            self.cv.itemconfigure(self._body, fill="#eef0f3", outline="")
+            self.cv.itemconfigure(self._inner_shadow, outline="#e0e2e6", width=1)
         elif mode == "solid":
-            # 录音: 柔和粉红 + 浅红边
+            # 录音: 柔和粉红
             self.cv.itemconfigure(self._body, fill="#fee2e2", outline="")
-            self.cv.itemconfigure(self._rim, outline="#fca5a5", width=2)
-            self.cv.itemconfigure(self._highlight, fill="#fafafc")
-        else:  # glass 待命
-            # 玻璃感: 白底 + 浅蓝边 + 顶部月牙高光
+            self.cv.itemconfigure(self._inner_shadow, outline="#fca5a5", width=1)
+        else:  # glass
+            # 待命: 白底玻璃
             self.cv.itemconfigure(self._body, fill="#ffffff", outline="")
-            self.cv.itemconfigure(self._rim, outline="#bfdbfe", width=2)
-            self.cv.itemconfigure(self._highlight, fill="#fafafc")
-        # 录音态: 品牌图隐藏, 改显示 ■ 方块
+            self.cv.itemconfigure(self._inner_shadow, outline="#bfdbfe", width=1)
+        # 切 tint (状态色光晕)
+        if hasattr(self, "_glass_tints"):
+            self.cv.itemconfigure(self._tint_id, image=self._glass_tints.get(mode))
+        # Specular 高光 (待命时显示, 录音时减弱)
+        self.cv.itemconfigure(self._specular_id,
+                              state="normal" if mode != "solid" else "hidden")
+        # rim light
+        if mode == "empty":
+            self.cv.itemconfigure(self._rim_top, state="hidden")
+            self.cv.itemconfigure(self._rim_bottom, state="hidden")
+        else:
+            self.cv.itemconfigure(self._rim_top, state="normal")
+            self.cv.itemconfigure(self._rim_bottom, state="normal")
+        # 品牌图 vs 录音方块
         if hasattr(self, "_photo_id") and self._photo_id is not None:
             self.cv.itemconfigure(self._photo_id, state="hidden" if mode == "solid" else "normal")
         if hasattr(self, "_rec_dot"):
             self.cv.itemconfigure(self._rec_dot, state="normal" if mode == "solid" else "hidden")
+        # 脉冲环
         for oval, _ in self._pulses:
             self.cv.itemconfigure(oval, state="normal" if pulsing else "hidden")
 
@@ -1927,6 +1971,20 @@ class MainWindow:
         scroll.pack(side=tk.RIGHT, fill=tk.Y)
         self.txt.configure(yscrollcommand=scroll.set)
         self.txt.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        # v0.6.5: 让识别结果可复制 + 右键菜单 (v0.6.6 升级)
+        self.txt.bind("<Double-Button-1>", self._copy_result)
+        # 右键菜单 (在 Text 控件上弹出)
+        self._text_menu = tk.Menu(self.root, tearoff=0,
+                                   font=("Microsoft YaHei UI", 9),
+                                   bg=c["card"], fg=c["fg"],
+                                   activebackground=c["accent"],
+                                   activeforeground="#ffffff",
+                                   relief=tk.FLAT, bd=1)
+        self._text_menu.add_command(label="复制", command=self._copy_result)
+        self._text_menu.add_command(label="全选", command=self._select_all_result)
+        self.txt.bind("<Button-3>", self._show_text_menu)
+        # Ctrl+C 全局快捷键
+        self.root.bind_all("<Control-c>", lambda e: self._copy_result())
         self.txt.tag_configure("title", font=("Microsoft YaHei UI", 13, "bold"),
                                foreground=c["fg2"], spacing1=2, spacing3=2)
         self.txt.tag_configure("kbd", font=("Cascadia Mono", 9, "bold"),
@@ -2095,17 +2153,40 @@ class MainWindow:
             pass
         self.root.after(100, self._poll)
 
-    def _copy_result(self):
+    def _copy_result(self, _evt=None):
+        # Text 设为 state=DISABLED 阻止输入, 但也阻止了 get().
+        # 临时切到 NORMAL, 复制, 再切回.
         try:
+            self.txt.configure(state=tk.NORMAL)
             content = self.txt.get("1.0", tk.END).strip()
+            self.txt.configure(state=tk.DISABLED)
             if content and content != "等待语音输入":
                 pyperclip.copy(content)
-                old = self.copy_btn.cget("text")
-                self.copy_btn.configure(text="已复制", fg=self.c["accent"])
-                self.root.after(1200, lambda: self.copy_btn.configure(text=old, fg=self.c["fg2"]))
+                # 底部 "复制" 按钮短暂反馈
+                if hasattr(self, "copy_btn"):
+                    old_text = self.copy_btn.cget("text")
+                    self.copy_btn.configure(text="已复制 ✓", fg=self.c["ok"])
+                    self.root.after(1500, lambda: self.copy_btn.configure(text=old_text, fg=self.c["fg2"]))
                 log(f"复制结果: {content[:30]}...")
         except Exception as e:
             log(f"复制失败: {e}")
+
+    def _select_all_result(self):
+        # 切换到 NORMAL 才能操作 selection, 复制完再切回
+        try:
+            self.txt.configure(state=tk.NORMAL)
+            self.txt.tag_add("sel", "1.0", "end")
+            self.txt.mark_set("insert", "1.0")
+            self.txt.see("insert")
+            self.txt.configure(state=tk.DISABLED)
+        except Exception as e:
+            log(f"全选失败: {e}")
+
+    def _show_text_menu(self, e):
+        try:
+            self._text_menu.tk_popup(e.x_root, e.y_root)
+        finally:
+            self._text_menu.grab_release()
 
     def _update_tray(self):
         t = getattr(self, 'tray', None)
@@ -2219,36 +2300,8 @@ class SettingsDialog:
 
     def _general_tab(self, p):
         c = self.mw.c
-        # 用 Canvas+Scrollbar 让内容可滚动 (v0.6.5 修复: 之前不能滚)
-        container = tk.Frame(p, bg=c["bg"])
-        container.pack(fill=tk.BOTH, expand=True, padx=0, pady=0)
-        self._general_canvas = tk.Canvas(container, bg=c["bg"],
-                                         highlightthickness=0, bd=0)
-        sb = tk.Scrollbar(container, orient=tk.VERTICAL,
-                          command=self._general_canvas.yview,
-                          bg=c["card"], troughcolor=c["bg"],
-                          activebackground=c["border"], width=6)
-        self._general_canvas.configure(yscrollcommand=sb.set)
-        sb.pack(side=tk.RIGHT, fill=tk.Y)
-        self._general_canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        # 在 Canvas 内的 Frame (真实容器)
-        f = tk.Frame(self._general_canvas, bg=c["bg"])
-        self._general_canvas_window = self._general_canvas.create_window(
-            (0, 0), window=f, anchor=tk.NW)
-        # 滚动区高度自适应
-        def _on_frame_configure(e):
-            self._general_canvas.configure(scrollregion=self._general_canvas.bbox("all"))
-            # 让 frame 宽度跟随 canvas
-            self._general_canvas.itemconfigure(self._general_canvas_window, width=self._general_canvas.winfo_width())
-        f.bind("<Configure>", _on_frame_configure)
-        # 鼠标滚轮滚动 (Windows + Mac + Linux)
-        def _on_wheel(e):
-            if e.num == 4: delta = -1
-            elif e.num == 5: delta = 1
-            else: delta = -1 if e.delta > 0 else 1
-            self._general_canvas.yview_scroll(delta, "units")
-        self._general_canvas.bind("<Enter>", lambda e: self._general_canvas.bind_all("<MouseWheel>", _on_wheel))
-        self._general_canvas.bind("<Leave>", lambda e: self._general_canvas.unbind_all("<MouseWheel>"))
+        f = tk.Frame(p, bg=c["bg"])
+        f.pack(fill=tk.BOTH, expand=True, padx=4, pady=4)
         # 启动 / 行为
         self._section_label(f, "启动", "登录后是否自动进入")
         self.auto_start_var = tk.BooleanVar(value=config.get("auto_start", True))
@@ -2260,7 +2313,7 @@ class SettingsDialog:
                      font=("Microsoft YaHei UI", 8), fg=c["warn"], bg=c["bg"],
                      justify=tk.LEFT).pack(anchor=tk.W, pady=(4, 0))
         else:
-            status = "已注册到 HKCU\\...\\Run" if is_auto_start_enabled() else "未注册"
+            status = "已注册到 HKCU\...\Run" if is_auto_start_enabled() else "未注册"
             tk.Label(f, text=f"当前状态: {status}",
                      font=("Microsoft YaHei UI", 8), fg=c["fg3"], bg=c["bg"],
                      justify=tk.LEFT).pack(anchor=tk.W, pady=(4, 0))
@@ -2273,7 +2326,7 @@ class SettingsDialog:
                           "关闭: 共享模式, 适合多人协作 / 会议场景",
                           self.exclusive_var, self._exclusive_toggle)
 
-        # 悬浮气泡 (v0.7.0 预留)
+        # 桌面
         self._section_label(f, "桌面", "关闭主窗口后是否留在桌面上")
         self.bubble_var = tk.BooleanVar(value=config.get("floating_bubble", True))
         self._setting_row(f, "悬浮气泡",
@@ -2321,31 +2374,8 @@ class SettingsDialog:
 
     def _audio_tab(self, p):
         c = self.mw.c
-        container = tk.Frame(p, bg=c["bg"])
-        container.pack(fill=tk.BOTH, expand=True, padx=0, pady=0)
-        self._audio_canvas = tk.Canvas(container, bg=c["bg"],
-                                        highlightthickness=0, bd=0)
-        sb = tk.Scrollbar(container, orient=tk.VERTICAL,
-                          command=self._audio_canvas.yview,
-                          bg=c["card"], troughcolor=c["bg"],
-                          activebackground=c["border"], width=6)
-        self._audio_canvas.configure(yscrollcommand=sb.set)
-        sb.pack(side=tk.RIGHT, fill=tk.Y)
-        self._audio_canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        f = tk.Frame(self._audio_canvas, bg=c["bg"])
-        self._audio_canvas_window = self._audio_canvas.create_window(
-            (0, 0), window=f, anchor=tk.NW)
-        def _on_frame_configure2(e):
-            self._audio_canvas.configure(scrollregion=self._audio_canvas.bbox("all"))
-            self._audio_canvas.itemconfigure(self._audio_canvas_window, width=self._audio_canvas.winfo_width())
-        f.bind("<Configure>", _on_frame_configure2)
-        def _on_wheel2(e):
-            if e.num == 4: delta = -1
-            elif e.num == 5: delta = 1
-            else: delta = -1 if e.delta > 0 else 1
-            self._audio_canvas.yview_scroll(delta, "units")
-        self._audio_canvas.bind("<Enter>", lambda e: self._audio_canvas.bind_all("<MouseWheel>", _on_wheel2))
-        self._audio_canvas.bind("<Leave>", lambda e: self._audio_canvas.unbind_all("<MouseWheel>"))
+        f = tk.Frame(p, bg=c["bg"])
+        f.pack(fill=tk.BOTH, expand=True, padx=4, pady=4)
         self._section_label(f, "选择麦克风", "设置后立即生效")
         devs = AudioRecorder.list_devices()
         self.dv = tk.StringVar(); self.dm = {}
