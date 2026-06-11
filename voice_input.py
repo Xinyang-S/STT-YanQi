@@ -1306,25 +1306,30 @@ class FloatingBubble:
     def _create(self):
         c = self.c
         s = self.SIZE
-        # 关键: 不用 -alpha (Windows layered window 会丢鼠标事件导致拖动失效)
-        # 玻璃感靠 Canvas 4 层堆叠模拟
+        # 关键: 不用 -alpha (Windows layered window 会丢鼠标事件)
+        # 用 -transparentcolor 把 toplevel 4 角变透明 → 看起来是圆形
         self.win = tk.Toplevel(self.root)
         self.win.overrideredirect(True)
         self.win.attributes("-topmost", True)
         self.win.geometry(f"{s}x{s}")
-        self.win.configure(bg="#e8e8ee")
+        self._TRANSPARENT_KEY = "#fafafc"
+        self.win.configure(bg=self._TRANSPARENT_KEY)
+        try:
+            self.win.attributes("-transparentcolor", self._TRANSPARENT_KEY)
+        except Exception:
+            pass
         self.cv = tk.Canvas(self.win, width=s, height=s,
-                            bg="#e8e8ee", highlightthickness=0, cursor="hand2")
+                            bg=self._TRANSPARENT_KEY, highlightthickness=0, cursor="hand2")
         self.cv.pack()
-        # L0 扩散阴影 (略大, 极淡)
-        self._shadow = self.cv.create_oval(0, 2, s, s + 4, fill="#d0d0d5", outline="")
-        # L1 玻璃主体 (状态色在此处反映)
-        self._body = self.cv.create_oval(3, 3, s - 3, s - 3, fill="", outline="")
-        # L2 顶部月牙高光 (玻璃反光关键)
+        # L0 扩散阴影 (极淡, 模拟浮动)
+        self._shadow = self.cv.create_oval(2, 4, s - 2, s + 2, fill="#d0d0d5", outline="")
+        # L1 玻璃主体: 圆撑满 (留 2px 给 transparent 角)
+        self._body = self.cv.create_oval(2, 2, s - 2, s - 2, fill="", outline="")
+        # L2 顶部月牙高光
         self._highlight = self.cv.create_oval(10, 4, s - 10, s // 2 + 4,
                                                fill="#ffffff", outline="")
-        # L3 rim light (1px 白色描边 = 玻璃边缘折射)
-        self._rim = self.cv.create_oval(3, 3, s - 3, s - 3, fill="", outline="", width=1)
+        # L3 rim light (1px 描边)
+        self._rim = self.cv.create_oval(2, 2, s - 2, s - 2, fill="", outline="", width=1)
         # L4 品牌图 (中心 56x56)
         self._photo_id = None
         self._photo_ref = None
@@ -1334,7 +1339,7 @@ class FloatingBubble:
             bird.thumbnail((56, 56), Image.LANCZOS)
             self._photo_ref = ImageTk.PhotoImage(bird)
             self._photo_id = self.cv.create_image(s // 2, s // 2, image=self._photo_ref)
-        # 录音态: 中心 ■ 方块 (强调"正在录")
+        # 录音态: 中心 ■ 方块
         self._rec_dot = self.cv.create_rectangle(s//2-10, s//2-10, s//2+10, s//2+10,
                                                  fill="#ffffff", outline="")
         self.cv.itemconfigure(self._rec_dot, state="hidden")
@@ -1344,9 +1349,22 @@ class FloatingBubble:
             oval = self.cv.create_oval(0, 0, 0, 0, outline=pulse_colors[i], width=2)
             self.cv.itemconfigure(oval, state="hidden")
             self._pulses.append((oval, i * 0.33))
+        # 拖动: 用 <Motion> 事件 + _pressed 标志, B1-Motion 在 borderless toplevel 上常丢
+        self._pressed = False
+        self.win.bind("<ButtonPress-1>", self._on_press)
+        self.win.bind("<ButtonRelease-1>", self._on_release)
+        self.win.bind("<Motion>", self._on_motion)
+        self.win.bind("<Button-3>", self._on_right_click)
+        self.win.bind("<Double-Button-1>", lambda e: self._show_main())
+        
+        pulse_colors = ["#fca5a5", "#fecaca", "#fee2e2"]
+        for i in range(self._pulse_count):
+            oval = self.cv.create_oval(0, 0, 0, 0, outline=pulse_colors[i], width=2)
+            self.cv.itemconfigure(oval, state="hidden")
+            self._pulses.append((oval, i * 0.33))
         # 事件全部绑到 Toplevel 自身 (画布在 -alpha 模式下 hit-test 不稳)
         self.win.bind("<ButtonPress-1>", self._on_press)
-        self.win.bind("<B1-Motion>", self._on_drag)
+        # <B1-Motion> removed, use <Motion> + _pressed flag
         self.win.bind("<ButtonRelease-1>", self._on_release)
         self.win.bind("<Button-3>", self._on_right_click)
         self.win.bind("<Double-Button-1>", lambda e: self._show_main())
@@ -1427,9 +1445,12 @@ class FloatingBubble:
         self._drag_data["x"] = e.x_root
         self._drag_data["y"] = e.y_root
         self._drag_data["moved"] = False
+        self._pressed = True
         self._trigger_press_anim()
 
-    def _on_drag(self, e):
+    def _on_motion(self, e):
+        if not self._pressed:
+            return
         dx = e.x_root - self._drag_data["x"]
         dy = e.y_root - self._drag_data["y"]
         if abs(dx) + abs(dy) > self.CLICK_THRESHOLD:
@@ -1438,7 +1459,6 @@ class FloatingBubble:
             return
         x = self.win.winfo_x() + dx
         y = self.win.winfo_y() + dy
-        # 屏幕边界保护: 至少 5px 在屏内
         sw = self.root.winfo_screenwidth()
         sh = self.root.winfo_screenheight()
         x = max(0, min(x, sw - self.SIZE))
@@ -1448,11 +1468,10 @@ class FloatingBubble:
         self._drag_data["y"] = e.y_root
 
     def _on_release(self, e):
-        # 持久化位置
+        self._pressed = False
         x = self.win.winfo_x(); y = self.win.winfo_y()
         config["bubble_x"] = x; config["bubble_y"] = y
         save_config()
-        # 没拖动 = 点击 → 恢复主窗口
         if not self._drag_data["moved"]:
             self._show_main()
 
@@ -1514,15 +1533,17 @@ class FloatingBubble:
         if self.visible: return
         if not config.get("floating_bubble", True):
             return
-        # 位置: 持久化坐标 > 默认 (屏幕右侧中部)
+        # 位置: 持久化坐标 > 默认 (屏幕偏右下角, 不贴边 — 给用户拖动缓冲)
         x = config.get("bubble_x")
         y = config.get("bubble_y")
+        # 持久化坐标也必须在屏内
+        if x is None or y is None or x < 0 or y < 0:
+            x = None; y = None
         if x is None or y is None:
             sw = self.root.winfo_screenwidth()
             sh = self.root.winfo_screenheight()
-            x = sw - self.SIZE - 30
-            y = sh // 2 - self.SIZE // 2
-        # 边界保护: 至少 5px 在屏内
+            x = sw - self.SIZE - 80
+            y = sh - self.SIZE - 100
         sw = self.root.winfo_screenwidth()
         sh = self.root.winfo_screenheight()
         x = max(0, min(x, sw - self.SIZE))
@@ -1916,6 +1937,13 @@ class MainWindow:
         self.txt.tag_configure("error", font=("Microsoft YaHei UI", 11),
                                foreground=c["rec"])
         self.txt.configure(state=tk.DISABLED)
+        def _on_text_wheel(e):
+            if e.num == 4: delta = -1
+            elif e.num == 5: delta = 1
+            else: delta = -1 if e.delta > 0 else 1
+            self.txt.yview_scroll(delta, "units")
+        self.txt.bind("<Enter>", lambda e: self.txt.bind_all("<MouseWheel>", _on_text_wheel))
+        self.txt.bind("<Leave>", lambda e: self.txt.unbind_all("<MouseWheel>"))
         self.root.after_idle(self._set_text_placeholder)
         self._engine_text = "本地 SenseVoice"
 
@@ -2191,8 +2219,36 @@ class SettingsDialog:
 
     def _general_tab(self, p):
         c = self.mw.c
-        f = tk.Frame(p, bg=c["bg"])
-        f.pack(fill=tk.BOTH, expand=True, padx=4, pady=4)
+        # 用 Canvas+Scrollbar 让内容可滚动 (v0.6.5 修复: 之前不能滚)
+        container = tk.Frame(p, bg=c["bg"])
+        container.pack(fill=tk.BOTH, expand=True, padx=0, pady=0)
+        self._general_canvas = tk.Canvas(container, bg=c["bg"],
+                                         highlightthickness=0, bd=0)
+        sb = tk.Scrollbar(container, orient=tk.VERTICAL,
+                          command=self._general_canvas.yview,
+                          bg=c["card"], troughcolor=c["bg"],
+                          activebackground=c["border"], width=6)
+        self._general_canvas.configure(yscrollcommand=sb.set)
+        sb.pack(side=tk.RIGHT, fill=tk.Y)
+        self._general_canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        # 在 Canvas 内的 Frame (真实容器)
+        f = tk.Frame(self._general_canvas, bg=c["bg"])
+        self._general_canvas_window = self._general_canvas.create_window(
+            (0, 0), window=f, anchor=tk.NW)
+        # 滚动区高度自适应
+        def _on_frame_configure(e):
+            self._general_canvas.configure(scrollregion=self._general_canvas.bbox("all"))
+            # 让 frame 宽度跟随 canvas
+            self._general_canvas.itemconfigure(self._general_canvas_window, width=self._general_canvas.winfo_width())
+        f.bind("<Configure>", _on_frame_configure)
+        # 鼠标滚轮滚动 (Windows + Mac + Linux)
+        def _on_wheel(e):
+            if e.num == 4: delta = -1
+            elif e.num == 5: delta = 1
+            else: delta = -1 if e.delta > 0 else 1
+            self._general_canvas.yview_scroll(delta, "units")
+        self._general_canvas.bind("<Enter>", lambda e: self._general_canvas.bind_all("<MouseWheel>", _on_wheel))
+        self._general_canvas.bind("<Leave>", lambda e: self._general_canvas.unbind_all("<MouseWheel>"))
         # 启动 / 行为
         self._section_label(f, "启动", "登录后是否自动进入")
         self.auto_start_var = tk.BooleanVar(value=config.get("auto_start", True))
@@ -2265,8 +2321,31 @@ class SettingsDialog:
 
     def _audio_tab(self, p):
         c = self.mw.c
-        f = tk.Frame(p, bg=c["bg"])
-        f.pack(fill=tk.BOTH, expand=True, padx=4, pady=4)
+        container = tk.Frame(p, bg=c["bg"])
+        container.pack(fill=tk.BOTH, expand=True, padx=0, pady=0)
+        self._audio_canvas = tk.Canvas(container, bg=c["bg"],
+                                        highlightthickness=0, bd=0)
+        sb = tk.Scrollbar(container, orient=tk.VERTICAL,
+                          command=self._audio_canvas.yview,
+                          bg=c["card"], troughcolor=c["bg"],
+                          activebackground=c["border"], width=6)
+        self._audio_canvas.configure(yscrollcommand=sb.set)
+        sb.pack(side=tk.RIGHT, fill=tk.Y)
+        self._audio_canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        f = tk.Frame(self._audio_canvas, bg=c["bg"])
+        self._audio_canvas_window = self._audio_canvas.create_window(
+            (0, 0), window=f, anchor=tk.NW)
+        def _on_frame_configure2(e):
+            self._audio_canvas.configure(scrollregion=self._audio_canvas.bbox("all"))
+            self._audio_canvas.itemconfigure(self._audio_canvas_window, width=self._audio_canvas.winfo_width())
+        f.bind("<Configure>", _on_frame_configure2)
+        def _on_wheel2(e):
+            if e.num == 4: delta = -1
+            elif e.num == 5: delta = 1
+            else: delta = -1 if e.delta > 0 else 1
+            self._audio_canvas.yview_scroll(delta, "units")
+        self._audio_canvas.bind("<Enter>", lambda e: self._audio_canvas.bind_all("<MouseWheel>", _on_wheel2))
+        self._audio_canvas.bind("<Leave>", lambda e: self._audio_canvas.unbind_all("<MouseWheel>"))
         self._section_label(f, "选择麦克风", "设置后立即生效")
         devs = AudioRecorder.list_devices()
         self.dv = tk.StringVar(); self.dm = {}
