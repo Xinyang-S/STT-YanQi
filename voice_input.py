@@ -1235,12 +1235,12 @@ def _tray_icon_for(state_name):
         bg = (22, 163, 74, 255)      # 待命绿 #16a34a (与 c["ok"] 同色)
     if base is None:
         return _make_fallback_icon(bg)
-    # 鸟图贴在背景圆上: 64x64 透明底, 先画背景圆, 再居中贴鸟
+    # 鸟图贴在背景圆上: 64x64 透明底, 背景圆 60, 鸟图 56 (放大)
     img = Image.new("RGBA", (64, 64), (0, 0, 0, 0))
     d = ImageDraw.Draw(img)
-    d.ellipse([2, 2, 62, 62], fill=bg)
+    d.ellipse([0, 0, 64, 64], fill=bg)  # 圆撑满全图 (放大背景)
     bird = base.copy()
-    bird.thumbnail((46, 46), Image.LANCZOS)
+    bird.thumbnail((56, 56), Image.LANCZOS)
     # 居中粘贴
     ox = (64 - bird.size[0]) // 2
     oy = (64 - bird.size[1]) // 2
@@ -1310,45 +1310,44 @@ class FloatingBubble:
         self.win.overrideredirect(True)
         self.win.attributes("-topmost", True)
         self.win.geometry(f"{s}x{s}")
+        # 不再用 -transparentcolor (会让鼠标事件穿透 → 拖动失效)
+        # 改用 -alpha 0.92 玻璃感, Canvas bg 浅灰, 鼠标事件命中
         try:
-            self.win.attributes("-transparentcolor", self._GLASS_KEY)
-        except Exception:
-            pass
-        try:
-            self.win.attributes("-alpha", 0.88)  # 整体半透明 = 玻璃感
+            self.win.attributes("-alpha", 0.92)
         except Exception:
             pass
         self.cv = tk.Canvas(self.win, width=s, height=s,
-                            bg=self._GLASS_KEY, highlightthickness=0, cursor="hand2")
+                            bg="#e8e8ee", highlightthickness=0, cursor="hand2")
         self.cv.pack()
-        # 外层阴影 (大圆, 极淡灰, 模拟卡片投影)
+        # 外层阴影 (大圆, 极淡灰)
         self._shadow = self.cv.create_oval(2, 4, s - 2, s - 0, fill="#e5e7eb", outline="")
-        # 玻璃主体: 白色半透明圆
+        # 玻璃主体: 白色
         self._body = self.cv.create_oval(4, 4, s - 4, s - 4, fill="", outline="")
         # 高光层 (玻璃反光, 顶部月牙)
         self._highlight = self.cv.create_oval(12, 6, s - 12, s // 2 + 6,
                                                fill="#f8f8fc", outline="")
-        # 品牌图 (中心, 58x58)
+        # 品牌图: 中心 56x56 (v0.6.2 反馈: 46 太小了, 56 更醒目)
         self._photo_id = None
         self._photo_ref = None
         if _brand_img is not None:
             from PIL import ImageTk
             bird = _brand_img.copy()
-            bird.thumbnail((46, 46), Image.LANCZOS)
+            bird.thumbnail((56, 56), Image.LANCZOS)
             self._photo_ref = ImageTk.PhotoImage(bird)
             self._photo_id = self.cv.create_image(s // 2, s // 2, image=self._photo_ref)
-        # 录音脉冲环 (3 圈, 不同相位)
-        pulse_colors = [c["rec"], "#ff6b6b", "#ff8e8e"]
+        # 录音脉冲环: 柔和色调 (#fca5a5 / #fecaca / #fee2e2) — 不要浓
+        pulse_colors = ["#fca5a5", "#fecaca", "#fee2e2"]
         for i in range(self._pulse_count):
             oval = self.cv.create_oval(0, 0, 0, 0, outline=pulse_colors[i], width=2)
             self.cv.itemconfigure(oval, state="hidden")
-            self._pulses.append((oval, i * 0.33))  # 相位偏移 0, 0.33, 0.66
-        # 事件
-        self.cv.bind("<ButtonPress-1>", self._on_press)
-        self.cv.bind("<B1-Motion>", self._on_drag)
-        self.cv.bind("<ButtonRelease-1>", self._on_release)
-        self.cv.bind("<Button-3>", self._on_right_click)
-        self.cv.bind("<Double-Button-1>", lambda e: self._show_main())
+            self._pulses.append((oval, i * 0.33))
+        # 事件: 同时绑 win + cv, 防止 -alpha 区域的边缘不响应
+        for w in (self.win, self.cv):
+            w.bind("<ButtonPress-1>", self._on_press)
+            w.bind("<B1-Motion>", self._on_drag)
+            w.bind("<ButtonRelease-1>", self._on_release)
+            w.bind("<Button-3>", self._on_right_click)
+            w.bind("<Double-Button-1>", lambda e: self._show_main())
         self._menu = tk.Menu(self.win, tearoff=0,
                              bg=c["card"], fg=c["fg"],
                              activebackground=c["accent"], activeforeground="#ffffff",
@@ -1370,18 +1369,18 @@ class FloatingBubble:
         if not force and sig == self._state_cache:
             return
         self._state_cache = sig
-        c = self.c
         if mode == "empty":
-            self.cv.itemconfigure(self._body, fill="#f0f0f5", outline=c["border"])
+            # 禁用: 极淡灰白, 几乎与背景融合
+            self.cv.itemconfigure(self._body, fill="#e8eaed", outline="#cbd5e1", width=2)
             self.cv.itemconfigure(self._highlight, state="hidden")
         elif mode == "solid":
-            self.cv.itemconfigure(self._body, fill=color, outline=color)
-            self.cv.itemconfigure(self._highlight, state="hidden")
-        else:  # glass
-            # 玻璃感: 白底 + 80% 不透明 + 带颜色描边 + 高光
-            self.cv.itemconfigure(self._body, fill="#ffffff", outline=color, width=2)
+            # 录音: 柔和粉红 (不要浓红), 浅红描边
+            self.cv.itemconfigure(self._body, fill="#fee2e2", outline="#fca5a5", width=2)
             self.cv.itemconfigure(self._highlight, state="normal")
-        # 脉冲环: recording 时显示
+        else:  # glass
+            # 待命: 白底 + 浅蓝描边 (不要浓蓝)
+            self.cv.itemconfigure(self._body, fill="#ffffff", outline="#bfdbfe", width=2)
+            self.cv.itemconfigure(self._highlight, state="normal")
         for oval, _ in self._pulses:
             self.cv.itemconfigure(oval, state="normal" if pulsing else "hidden")
 
@@ -2109,13 +2108,18 @@ class SettingsDialog:
         try: style.theme_use("clam")
         except Exception: pass
         style.configure("TNotebook", background=c["bg"], borderwidth=0, tabmargins=(0, 0, 0, 0))
+        # 选中 tab: 白底 + 蓝字 + 大号字 + 大 padding (放大效果)
+        # 未选中 tab: 同 bg 色 + 灰字 + 9pt 小 padding
         style.configure("TNotebook.Tab",
-                        background=c["card"], foreground=c["fg2"],
-                        padding=(18, 10), font=("Microsoft YaHei UI", 9),
+                        background=c["bg"], foreground=c["fg3"],
+                        padding=(18, 6), font=("Microsoft YaHei UI", 9),
                         borderwidth=0)
         style.map("TNotebook.Tab",
-                  background=[("selected", c["bg"]), ("active", c["border"])],
-                  foreground=[("selected", c["accent"]), ("active", c["fg"])])
+                  background=[("selected", c["card"]), ("active", c["bg"])],
+                  foreground=[("selected", c["accent"]), ("active", c["fg2"])],
+                  font=[("selected", ("Microsoft YaHei UI", 10, "bold")),
+                         ("active", ("Microsoft YaHei UI", 9))],
+                  padding=[("selected", (18, 10)), ("active", (18, 6))])
         style.configure("TFrame", background=c["bg"])
         style.configure("TLabel", background=c["bg"], foreground=c["fg"])
         tk.Frame(self.win, bg=c["border"], height=1).pack(side=tk.TOP, fill=tk.X, padx=20, pady=(16, 0))
