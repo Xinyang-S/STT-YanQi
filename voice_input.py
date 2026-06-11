@@ -2300,8 +2300,26 @@ class SettingsDialog:
 
     def _general_tab(self, p):
         c = self.mw.c
-        f = tk.Frame(p, bg=c["bg"])
-        f.pack(fill=tk.BOTH, expand=True, padx=4, pady=4)
+        # Canvas+Scrollbar 作为 notebook 直接子 tab (不会 reparent 冲突)
+        cv = tk.Canvas(p, bg=c["bg"], highlightthickness=0, bd=0)
+        sb = tk.Scrollbar(p, orient=tk.VERTICAL, command=cv.yview,
+                          bg=c["card"], troughcolor=c["bg"], width=6)
+        cv.configure(yscrollcommand=sb.set)
+        cv.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        sb.pack(side=tk.RIGHT, fill=tk.Y)
+        # 内嵌 Frame
+        f = tk.Frame(cv, bg=c["bg"])
+        self._general_canvas = cv
+        self._general_window = cv.create_window((0, 0), window=f, anchor=tk.NW)
+        def on_config(e):
+            cv.configure(scrollregion=cv.bbox("all"))
+            cv.itemconfigure(self._general_window, width=cv.winfo_width())
+        f.bind("<Configure>", on_config)
+        def on_mw(e):
+            cv.yview_scroll(-1 if e.delta > 0 else 1, "units")
+        cv.bind("<Enter>", lambda e: cv.bind_all("<MouseWheel>", on_mw))
+        cv.bind("<Leave>", lambda e: cv.unbind_all("<MouseWheel>"))
+        self._general_canvas.after(50, lambda: cv.event_generate("<Configure>"))
         # 启动 / 行为
         self._section_label(f, "启动", "登录后是否自动进入")
         self.auto_start_var = tk.BooleanVar(value=config.get("auto_start", True))
@@ -2345,7 +2363,7 @@ class SettingsDialog:
         link = tk.Label(info_card, text="github.com/Xinyang-S/STT-YanQi",
                         font=("Consolas", 8), fg=c["accent"], bg=c["card"], cursor="hand2")
         link.pack(anchor=tk.W, padx=14, pady=(2, 10))
-        return f
+        return cv
 
     def _auto_start_toggle(self):
         enabled = self.auto_start_var.get()
@@ -2374,8 +2392,24 @@ class SettingsDialog:
 
     def _audio_tab(self, p):
         c = self.mw.c
-        f = tk.Frame(p, bg=c["bg"])
-        f.pack(fill=tk.BOTH, expand=True, padx=4, pady=4)
+        cv = tk.Canvas(p, bg=c["bg"], highlightthickness=0, bd=0)
+        sb = tk.Scrollbar(p, orient=tk.VERTICAL, command=cv.yview,
+                          bg=c["card"], troughcolor=c["bg"], width=6)
+        cv.configure(yscrollcommand=sb.set)
+        cv.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        sb.pack(side=tk.RIGHT, fill=tk.Y)
+        f = tk.Frame(cv, bg=c["bg"])
+        self._audio_canvas = cv
+        self._audio_window = cv.create_window((0, 0), window=f, anchor=tk.NW)
+        def on_config(e):
+            cv.configure(scrollregion=cv.bbox("all"))
+            cv.itemconfigure(self._audio_window, width=cv.winfo_width())
+        f.bind("<Configure>", on_config)
+        def on_mw(e):
+            cv.yview_scroll(-1 if e.delta > 0 else 1, "units")
+        cv.bind("<Enter>", lambda e: cv.bind_all("<MouseWheel>", on_mw))
+        cv.bind("<Leave>", lambda e: cv.unbind_all("<MouseWheel>"))
+        cv.after(100, lambda: cv.itemconfigure(self._audio_window, width=cv.winfo_width()))
         self._section_label(f, "选择麦克风", "设置后立即生效")
         devs = AudioRecorder.list_devices()
         self.dv = tk.StringVar(); self.dm = {}
@@ -2408,7 +2442,7 @@ class SettingsDialog:
         else:
             tk.Label(f, text="未检测到麦克风", font=("Microsoft YaHei UI", 10),
                      fg=c["err"], bg=c["bg"]).pack(pady=20)
-        return f
+        return cv
 
     def _dev_save(self):
         lb = self.dv.get()
