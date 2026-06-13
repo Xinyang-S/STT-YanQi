@@ -1,22 +1,4 @@
-:root {
-  --accent: #007aff;
-  --panel-alpha: 0.54;
-  --window-alpha: 0.55;
-  --glass-alpha: 0.49;
-  --glass-soft-alpha: 0.22;
-  --chrome-alpha: 0.34;
-  --line-alpha: 0.48;
-  --aura-alpha: 0.42;
-  --glass-blur: 26px;
-  --glass-saturation: 1.65;
-  color: #102033;
-  background: transparent;
-  font-family: "Aptos", "Segoe UI Variable", "Microsoft YaHei UI", sans-serif;
-  font-size: 16px;
-  text-rendering: geometricPrecision;
-  -webkit-font-smoothing: antialiased;
-  font-synthesis: none;
-}
+@import "./styles/tokens.css";
 
 * {
   box-sizing: border-box;
@@ -911,6 +893,35 @@ button {
 
 .shortcut-row.capturing .shortcut-pill {
   color: var(--accent);
+}
+
+.diagnostic-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 14px 0 2px;
+}
+
+.diagnostic-row strong,
+.diagnostic-row em {
+  display: block;
+}
+
+.diagnostic-row strong {
+  color: #18304a;
+  font-size: 14px;
+}
+
+.diagnostic-row em {
+  max-width: 230px;
+  margin-top: 4px;
+  overflow: hidden;
+  color: #708295;
+  font-size: 12px;
+  font-style: normal;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .device-list {

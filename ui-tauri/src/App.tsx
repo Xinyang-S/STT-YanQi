@@ -5,6 +5,7 @@ import {
   AudioLines,
   Check,
   Copy,
+  FileDown,
   Keyboard,
   Minus,
   Mic,
@@ -20,37 +21,9 @@ import {
   Sparkles,
   X,
 } from "lucide-react";
+import { backendApi, type BackendInfo, type BackendPayload, type BackendState, type Device } from "./backend";
+import { product } from "./i18n";
 import "./App.css";
-
-const API = "http://127.0.0.1:47632";
-
-type BackendState = {
-  service: string;
-  last_event: string;
-  last_event_at: number;
-  enabled: boolean;
-  recording: boolean;
-  engine: string;
-  last_text: string;
-  last_error: string;
-  audio_mode: string;
-  mic_guarded: boolean;
-  exclusive: boolean;
-  floating_bubble: boolean;
-  input_device_index: number | null;
-  language: string;
-};
-
-type BackendPayload = {
-  ok?: boolean;
-  state?: BackendState;
-};
-
-type Device = {
-  index: number;
-  name: string;
-  default: boolean;
-};
 
 type AppearanceMode = "liquid" | "clear";
 
@@ -205,7 +178,7 @@ const defaultAppearance: AppearanceConfig = {
 
 function loadAppearance(): AppearanceConfig {
   try {
-    const saved = JSON.parse(window.localStorage.getItem("yanqi-appearance") || "null") as Partial<AppearanceConfig> | null;
+    const saved = JSON.parse(window.localStorage.getItem("vernest-appearance") || "null") as Partial<AppearanceConfig> | null;
     return {
       ...defaultAppearance,
       ...saved,
@@ -219,15 +192,6 @@ function loadAppearance(): AppearanceConfig {
   }
 }
 
-async function api<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(`${API}${path}`, {
-    headers: { "content-type": "application/json" },
-    ...init,
-  });
-  if (!res.ok) throw new Error(await res.text());
-  return res.json() as Promise<T>;
-}
-
 function App() {
   const isBubbleView = new URLSearchParams(window.location.search).get("view") === "bubble";
   const [state, setState] = useState<BackendState>(fallbackState);
@@ -238,15 +202,18 @@ function App() {
   const [appearance, setAppearance] = useState<AppearanceConfig>(loadAppearance);
   const [shortcut, setShortcut] = useState<ShortcutConfig>(defaultShortcut);
   const [capturingShortcut, setCapturingShortcut] = useState(false);
+  const [diagnosticPath, setDiagnosticPath] = useState("");
   const [copied, setCopied] = useState(false);
   const pointerRecording = useRef(false);
   const shortcutModifierKeys = useRef<number[]>([]);
+  const backendToken = useRef("");
 
   const refresh = useCallback(async () => {
     try {
-      const info = await invoke<{ running: boolean }>("backend_info");
+      const info = await invoke<BackendInfo>("backend_info");
+      backendToken.current = info.backend_token || "";
       setBackendRunning(Boolean(info.running));
-      const payload = await api<{ ok: boolean; state: BackendState }>("/api/status");
+      const payload = await backendApi<{ ok: boolean; state: BackendState }>("/api/status", undefined, backendToken.current);
       setState(payload.state);
     } catch {
       setBackendRunning(false);
@@ -256,7 +223,7 @@ function App() {
 
   const refreshDevices = useCallback(async () => {
     try {
-      const payload = await api<{ ok: boolean; devices: Device[] }>("/api/devices");
+      const payload = await backendApi<{ ok: boolean; devices: Device[] }>("/api/devices", undefined, backendToken.current);
       setDevices(payload.devices);
     } catch {
       setDevices([]);
@@ -264,8 +231,10 @@ function App() {
   }, []);
 
   useEffect(() => {
-    refresh();
-    refreshDevices();
+    void (async () => {
+      await refresh();
+      await refreshDevices();
+    })();
     void invoke<ShortcutConfig>("get_shortcut_config")
       .then(setShortcut)
       .catch(() => setShortcut(defaultShortcut));
@@ -372,16 +341,16 @@ function App() {
   }, [appearance]);
 
   useEffect(() => {
-    window.localStorage.setItem("yanqi-appearance", JSON.stringify(appearance));
+    window.localStorage.setItem("vernest-appearance", JSON.stringify(appearance));
   }, [appearance]);
 
   const post = useCallback(
     async (path: string, body?: unknown) => {
       try {
-        const payload = await api<BackendPayload>(path, {
+        const payload = await backendApi<BackendPayload>(path, {
           method: "POST",
           body: body ? JSON.stringify(body) : "{}",
-        });
+        }, backendToken.current);
         if (payload.state) setState(payload.state);
       } catch {
         refresh();
@@ -481,6 +450,15 @@ function App() {
     }
   }
 
+  async function exportDiagnostics() {
+    try {
+      const path = await invoke<string>("export_diagnostics");
+      setDiagnosticPath(path);
+    } catch {
+      setDiagnosticPath("导出失败");
+    }
+  }
+
   function startWindowDrag(event: PointerEvent<HTMLElement>) {
     if (event.button !== 0) return;
     event.preventDefault();
@@ -565,8 +543,8 @@ function App() {
             <div className="identity">
               <img src="/brand/app_icon.png" alt="" />
               <div>
-                <h1>言栖</h1>
-                <p>Liquid Voice Input</p>
+                <h1>{product.zhName}</h1>
+                <p>{product.enName} Local Voice</p>
               </div>
             </div>
             <div className="status-pill">
@@ -730,6 +708,17 @@ function App() {
                 </button>
               ))}
               {!devices.length && <p className="empty">未检测到麦克风或后端未连接。</p>}
+            </div>
+
+            <div className="diagnostic-row">
+              <div>
+                <strong>本地诊断</strong>
+                <em>{diagnosticPath || "生成本地诊断文件，不上传任何数据"}</em>
+              </div>
+              <button type="button" className="shortcut-pill" onClick={exportDiagnostics}>
+                <FileDown size={15} />
+                导出
+              </button>
             </div>
           </div>
         )}

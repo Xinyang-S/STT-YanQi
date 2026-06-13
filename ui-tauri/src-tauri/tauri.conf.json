@@ -2,7 +2,7 @@
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "言栖",
   "version": "0.6.7",
-  "identifier": "com.xinyang.yanqi",
+  "identifier": "com.xinyang.vernest",
   "build": {
     "beforeDevCommand": "npm run dev",
     "devUrl": "http://localhost:1420",
@@ -25,15 +25,22 @@
       }
     ],
     "security": {
-      "csp": null
+      "csp": "default-src 'self'; img-src 'self' data: asset: http://asset.localhost; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self' ipc: http://ipc.localhost http://127.0.0.1:47632"
     }
   },
   "bundle": {
     "active": true,
     "targets": "nsis",
     "externalBin": [
-      "bin/yanqi-backend"
+      "bin/vernest-backend"
     ],
+    "publisher": "孙欣阳",
+    "homepage": "https://github.com/Xinyang-S/STT-YanQi/tree/main",
+    "copyright": "Copyright © 2026 孙欣阳. All rights reserved.",
+    "license": "MIT",
+    "licenseFile": "../../LICENSE",
+    "shortDescription": "Vernest local voice input",
+    "longDescription": "言栖 Vernest 是一款完全本地离线的 Windows 桌面语音输入工具。",
     "resources": {
       "../../models/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2024-07-17/model.int8.onnx": "models/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2024-07-17/model.int8.onnx",
       "../../models/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2024-07-17/tokens.txt": "models/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2024-07-17/tokens.txt",

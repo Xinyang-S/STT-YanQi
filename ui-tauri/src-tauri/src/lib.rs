@@ -1,5 +1,7 @@
 use std::{
+    collections::hash_map::DefaultHasher,
     fs,
+    hash::{Hash, Hasher},
     io::{Read, Write},
     net::{Ipv4Addr, SocketAddr, SocketAddrV4, TcpStream},
     path::PathBuf,
@@ -22,6 +24,12 @@ use tauri::{
     AppHandle, Emitter, Manager, WebviewUrl, WebviewWindowBuilder, WindowEvent,
 };
 
+mod product;
+use product::{
+    app_data_dir, APP_VERSION, BACKEND_SIDECAR_NAME, BUNDLED_BACKEND_NAME, COPYRIGHT,
+    LEGACY_BACKEND_SIDECAR_NAME, LEGACY_BUNDLED_BACKEND_NAME,
+};
+
 #[cfg(target_os = "windows")]
 use windows_sys::Win32::{
     Foundation::{LPARAM, LRESULT, WPARAM},
@@ -40,12 +48,10 @@ use windows_sys::Win32::{
     },
 };
 
-#[cfg(all(target_os = "windows", target_arch = "x86_64", target_env = "msvc"))]
-const BACKEND_SIDECAR_NAME: &str = "yanqi-backend-x86_64-pc-windows-msvc.exe";
-
 struct BackendProcess {
     child: Mutex<Option<Child>>,
     backend_path: PathBuf,
+    backend_token: String,
     port: u16,
     closing: AtomicBool,
 }
@@ -124,6 +130,7 @@ static APP_HANDLE: OnceLock<AppHandle> = OnceLock::new();
 static SOUND_TX: OnceLock<mpsc::Sender<PromptSound>> = OnceLock::new();
 static SHORTCUT_STATE: OnceLock<Mutex<ShortcutState>> = OnceLock::new();
 static SHORTCUT_CONFIG: OnceLock<Mutex<ShortcutConfig>> = OnceLock::new();
+static BACKEND_AUTH_TOKEN: OnceLock<String> = OnceLock::new();
 
 impl Drop for BackendProcess {
     fn drop(&mut self) {
@@ -135,6 +142,9 @@ impl Drop for BackendProcess {
 struct BackendInfo {
     port: u16,
     backend_path: String,
+    backend_token: String,
+    app_data_dir: String,
+    version: String,
     running: bool,
 }
 
@@ -151,10 +161,30 @@ fn shortcut_config_store() -> &'static Mutex<ShortcutConfig> {
     SHORTCUT_CONFIG.get_or_init(|| Mutex::new(load_shortcut_config().unwrap_or_default()))
 }
 
-fn shortcut_config_path() -> Option<PathBuf> {
+fn shortcut_config_path() -> PathBuf {
+    app_data_dir().join("shortcut.json")
+}
+
+fn legacy_shortcut_config_path() -> Option<PathBuf> {
     std::env::var_os("APPDATA")
         .map(PathBuf::from)
         .map(|path| path.join("YanQi").join("shortcut.json"))
+}
+
+fn migrate_legacy_shortcut_config(path: &PathBuf) {
+    if path.exists() {
+        return;
+    }
+    let Some(legacy_path) = legacy_shortcut_config_path() else {
+        return;
+    };
+    if !legacy_path.exists() {
+        return;
+    }
+    if let Some(parent) = path.parent() {
+        let _ = fs::create_dir_all(parent);
+    }
+    let _ = fs::copy(legacy_path, path);
 }
 
 fn shortcut_label(config: &ShortcutConfig) -> String {
@@ -244,7 +274,8 @@ fn normalize_shortcut_config(mut config: ShortcutConfig) -> Result<ShortcutConfi
 }
 
 fn load_shortcut_config() -> Option<ShortcutConfig> {
-    let path = shortcut_config_path()?;
+    let path = shortcut_config_path();
+    migrate_legacy_shortcut_config(&path);
     let content = fs::read_to_string(path).ok()?;
     serde_json::from_str::<ShortcutConfig>(&content)
         .ok()
@@ -252,7 +283,7 @@ fn load_shortcut_config() -> Option<ShortcutConfig> {
 }
 
 fn save_shortcut_config(config: &ShortcutConfig) -> Result<(), String> {
-    let path = shortcut_config_path().ok_or_else(|| "无法定位用户配置目录".to_string())?;
+    let path = shortcut_config_path();
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).map_err(|err| err.to_string())?;
     }
@@ -352,12 +383,22 @@ fn backend_sidecar_candidates() -> Vec<PathBuf> {
     if let Ok(current_exe) = std::env::current_exe() {
         if let Some(exe_dir) = current_exe.parent() {
             candidates.push(exe_dir.join(BACKEND_SIDECAR_NAME));
+            candidates.push(exe_dir.join(BUNDLED_BACKEND_NAME));
+            candidates.push(exe_dir.join(LEGACY_BACKEND_SIDECAR_NAME));
+            candidates.push(exe_dir.join(LEGACY_BUNDLED_BACKEND_NAME));
             candidates.push(exe_dir.join("resources").join(BACKEND_SIDECAR_NAME));
+            candidates.push(exe_dir.join("resources").join(BUNDLED_BACKEND_NAME));
             candidates.push(
                 exe_dir
                     .join("..")
                     .join("resources")
                     .join(BACKEND_SIDECAR_NAME),
+            );
+            candidates.push(
+                exe_dir
+                    .join("..")
+                    .join("resources")
+                    .join(BUNDLED_BACKEND_NAME),
             );
         }
     }
@@ -371,45 +412,53 @@ fn backend_sidecar_candidates() -> Vec<PathBuf> {
     candidates
 }
 
-fn spawn_sidecar(path: &PathBuf, port: u16) -> Option<Child> {
-    Command::new(path)
+fn spawn_sidecar(path: &PathBuf, port: u16, token: &str) -> Option<Child> {
+    let mut command = Command::new(path);
+    if let Some(parent) = path.parent() {
+        command.current_dir(parent);
+    }
+    command
         .arg("--no-hotkeys")
         .arg("--silent-sounds")
         .arg("--port")
         .arg(port.to_string())
+        .arg("--token")
+        .arg(token)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .spawn()
         .map_err(|err| {
-            eprintln!("failed to start YanQi sidecar {}: {err}", path.display());
+            eprintln!("failed to start Vernest sidecar {}: {err}", path.display());
             err
         })
         .ok()
 }
 
-fn spawn_python_backend(script_path: &PathBuf, port: u16) -> Option<Child> {
+fn spawn_python_backend(script_path: &PathBuf, port: u16, token: &str) -> Option<Child> {
     Command::new("python")
         .arg(script_path)
         .arg("--no-hotkeys")
         .arg("--silent-sounds")
         .arg("--port")
         .arg(port.to_string())
+        .arg("--token")
+        .arg(token)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .spawn()
         .map_err(|err| {
-            eprintln!("failed to start YanQi backend: {err}");
+            eprintln!("failed to start Vernest backend: {err}");
             err
         })
         .ok()
 }
 
-fn spawn_backend(port: u16) -> (Option<Child>, PathBuf) {
+fn spawn_backend(port: u16, token: &str) -> (Option<Child>, PathBuf) {
     for path in backend_sidecar_candidates() {
         if path.exists() {
-            if let Some(child) = spawn_sidecar(&path, port) {
+            if let Some(child) = spawn_sidecar(&path, port, token) {
                 return (Some(child), path);
             }
         }
@@ -417,11 +466,11 @@ fn spawn_backend(port: u16) -> (Option<Child>, PathBuf) {
 
     let script_path = backend_script_path();
     if !script_path.exists() {
-        eprintln!("YanQi backend script missing: {}", script_path.display());
+        eprintln!("Vernest backend script missing: {}", script_path.display());
         return (None, script_path);
     }
 
-    (spawn_python_backend(&script_path, port), script_path)
+    (spawn_python_backend(&script_path, port, token), script_path)
 }
 
 fn stop_backend(process: &BackendProcess) {
@@ -495,6 +544,27 @@ fn parse_backend_response(response: String) -> Result<serde_json::Value, String>
         .map_err(|err| err.to_string())
 }
 
+fn backend_auth_token() -> &'static str {
+    BACKEND_AUTH_TOKEN.get().map(String::as_str).unwrap_or("")
+}
+
+fn generate_backend_token() -> String {
+    let base = format!(
+        "{}:{}:{:?}",
+        std::process::id(),
+        now_ms(),
+        SystemTime::now()
+    );
+    let mut token = String::with_capacity(64);
+    for salt in 0..4_u8 {
+        let mut hasher = DefaultHasher::new();
+        base.hash(&mut hasher);
+        salt.hash(&mut hasher);
+        token.push_str(&format!("{:016x}", hasher.finish()));
+    }
+    token
+}
+
 fn post_backend_json(path: &'static str, port: u16) -> Result<serde_json::Value, String> {
     let addr = SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, port));
     let mut stream = TcpStream::connect_timeout(&addr, Duration::from_millis(500))
@@ -503,7 +573,8 @@ fn post_backend_json(path: &'static str, port: u16) -> Result<serde_json::Value,
     let _ = stream.set_write_timeout(Some(Duration::from_millis(700)));
     let _ = stream.set_read_timeout(Some(Duration::from_millis(700)));
     let request = format!(
-        "POST {path} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nContent-Type: application/json\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{{}}"
+        "POST {path} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nContent-Type: application/json\r\nX-Vernest-Token: {}\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{{}}",
+        backend_auth_token()
     );
     stream
         .write_all(request.as_bytes())
@@ -524,7 +595,7 @@ fn get_backend(path: &'static str, port: u16) -> Option<String> {
     let _ = stream.set_write_timeout(Some(Duration::from_millis(700)));
     let _ = stream.set_read_timeout(Some(Duration::from_millis(700)));
     let request =
-        format!("GET {path} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nConnection: close\r\n\r\n");
+        format!("GET {path} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nX-Vernest-Token: {}\r\nConnection: close\r\n\r\n", backend_auth_token());
     if stream.write_all(request.as_bytes()).is_err() {
         return None;
     }
@@ -568,7 +639,7 @@ fn prompt_sound_name(sound: PromptSound) -> &'static str {
 
 #[cfg(target_os = "windows")]
 fn prepare_prompt_sound(sound: PromptSound) -> Vec<u16> {
-    let dir = std::env::temp_dir().join("yanqi-tauri-sounds-v3");
+    let dir = std::env::temp_dir().join("vernest-tauri-sounds-v1");
     let _ = fs::create_dir_all(&dir);
     let path = dir.join(prompt_sound_name(sound));
     let bytes = prompt_sound_bytes(sound);
@@ -959,12 +1030,12 @@ fn start_keyboard_hook(port: u16) {
         let keyboard_hook =
             SetWindowsHookExW(WH_KEYBOARD_LL, Some(keyboard_proc), std::ptr::null_mut(), 0);
         if keyboard_hook.is_null() {
-            eprintln!("failed to install YanQi keyboard hook");
+            eprintln!("failed to install Vernest keyboard hook");
         }
 
         let mouse_hook = SetWindowsHookExW(WH_MOUSE_LL, Some(mouse_proc), std::ptr::null_mut(), 0);
         if mouse_hook.is_null() {
-            eprintln!("failed to install YanQi mouse hook");
+            eprintln!("failed to install Vernest mouse hook");
         }
 
         if keyboard_hook.is_null() && mouse_hook.is_null() {
@@ -1055,7 +1126,7 @@ fn backend_info(state: tauri::State<'_, BackendProcess>) -> BackendInfo {
                 }
                 Ok(None) => true,
                 Err(err) => {
-                    eprintln!("failed to inspect YanQi backend: {err}");
+                    eprintln!("failed to inspect Vernest backend: {err}");
                     false
                 }
             },
@@ -1066,6 +1137,9 @@ fn backend_info(state: tauri::State<'_, BackendProcess>) -> BackendInfo {
     BackendInfo {
         port: state.port,
         backend_path: state.backend_path.to_string_lossy().to_string(),
+        backend_token: state.backend_token.clone(),
+        app_data_dir: app_data_dir().to_string_lossy().to_string(),
+        version: APP_VERSION.to_string(),
         running,
     }
 }
@@ -1186,6 +1260,54 @@ fn show_main_window(app: AppHandle) {
     restore_main_window(&app);
 }
 
+fn redact_log_line(line: &str) -> String {
+    if line.contains("已粘贴") || line.contains("[本地]") || line.contains("result") {
+        return "[redacted recognition content]".to_string();
+    }
+    line.to_string()
+}
+
+fn read_recent_log() -> String {
+    let path = app_data_dir().join("logs").join("vernest.log");
+    let Ok(content) = fs::read_to_string(path) else {
+        return "log file not found".to_string();
+    };
+    let mut lines = content
+        .lines()
+        .rev()
+        .take(240)
+        .map(redact_log_line)
+        .collect::<Vec<_>>();
+    lines.reverse();
+    lines.join("\n")
+}
+
+#[tauri::command]
+fn export_diagnostics(state: tauri::State<'_, BackendProcess>) -> Result<String, String> {
+    let dir = app_data_dir().join("diagnostics");
+    fs::create_dir_all(&dir).map_err(|err| err.to_string())?;
+    let path = dir.join(format!("vernest-diagnostics-{}.txt", now_ms()));
+    let running = is_backend_port_open(state.port);
+    let content = format!(
+        "Vernest diagnostics\n\
+         version: {APP_VERSION}\n\
+         copyright: {COPYRIGHT}\n\
+         app_data_dir: {}\n\
+         backend_path: {}\n\
+         backend_port: {}\n\
+         backend_running: {}\n\
+         privacy: fully local; no diagnostic upload is performed by the app\n\n\
+         recent_log:\n{}\n",
+        app_data_dir().display(),
+        state.backend_path.display(),
+        state.port,
+        running,
+        read_recent_log()
+    );
+    fs::write(&path, content).map_err(|err| err.to_string())?;
+    Ok(path.to_string_lossy().to_string())
+}
+
 fn close_to_tray_async(app: AppHandle, window: tauri::Window, fallback_show_bubble: bool) {
     let port = BACKEND_PORT.load(Ordering::Relaxed);
     thread::spawn(move || {
@@ -1228,7 +1350,7 @@ fn setup_tray(app: &mut tauri::App) -> tauri::Result<()> {
     let menu = Menu::with_items(app, &[&show_item, &quit_item])?;
     let icon = Image::new(include_bytes!("../icons/tray-32.rgba"), 32, 32);
 
-    TrayIconBuilder::with_id("yanqi-tray")
+    TrayIconBuilder::with_id("vernest-tray")
         .tooltip("言栖")
         .icon(icon)
         .menu(&menu)
@@ -1254,15 +1376,60 @@ fn setup_tray(app: &mut tauri::App) -> tauri::Result<()> {
     Ok(())
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn normalizes_shortcut_input() {
+        let config = ShortcutConfig {
+            keys: vec![VK_RCONTROL_CODE, VK_RCONTROL_CODE, 999],
+            mouse_buttons: vec![2, 2],
+            label: "".to_string(),
+        };
+
+        let normalized = normalize_shortcut_config(config).expect("shortcut should be valid");
+        assert_eq!(normalized.keys, vec![VK_RCONTROL_CODE]);
+        assert_eq!(normalized.mouse_buttons, vec![2]);
+        assert_eq!(normalized.label, "Right Ctrl + Mouse Right");
+    }
+
+    #[test]
+    fn rejects_empty_shortcut() {
+        let config = ShortcutConfig {
+            keys: vec![],
+            mouse_buttons: vec![],
+            label: "".to_string(),
+        };
+
+        assert!(normalize_shortcut_config(config).is_err());
+    }
+
+    #[test]
+    fn redacts_recognition_log_content() {
+        assert_eq!(
+            redact_log_line("[12:00:00] 已粘贴: hello"),
+            "[redacted recognition content]"
+        );
+        assert_eq!(
+            redact_log_line("[12:00:00] backend ready"),
+            "[12:00:00] backend ready"
+        );
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let port = 47632;
-    let (child, backend_path) = spawn_backend(port);
+    let backend_token = generate_backend_token();
+    let _ = BACKEND_AUTH_TOKEN.set(backend_token.clone());
+    let (child, backend_path) = spawn_backend(port, &backend_token);
 
     tauri::Builder::default()
         .manage(BackendProcess {
             child: Mutex::new(child),
             backend_path,
+            backend_token,
             port,
             closing: AtomicBool::new(false),
         })
@@ -1302,7 +1469,8 @@ pub fn run() {
             get_shortcut_config,
             set_shortcut_config,
             show_main_window,
-            start_window_drag
+            start_window_drag,
+            export_diagnostics
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Core runtime for YanQi voice input.
+"""Core runtime for Vernest voice input.
 
 This module intentionally contains no Tkinter, pystray, or legacy desktop UI
 imports. It is used by the Tauri sidecar and can also be shared by legacy
@@ -10,6 +10,7 @@ import ctypes
 import json
 import os
 import re
+import shutil
 import struct
 import sys
 import tempfile
@@ -105,7 +106,7 @@ try:
     _SOUND_READY = False
 
     def _init_sounds():
-        """首次调用 _play 时初始化: 把所有 WAV 写入 ~/.voice_input/sounds/ 持久文件,
+        """首次调用 _play 时初始化: 把所有 WAV 写入应用数据目录的 sounds/ 持久文件,
         之后 PlaySound 直接读盘, 不再有删除竞态."""
         global _SOUND_READY
         if _SOUND_READY: return
@@ -540,11 +541,26 @@ class MicGuard:
 # ═══════════════════════════════════════════════════════════
 #  配置
 # ═══════════════════════════════════════════════════════════
-CONFIG_DIR = Path.home() / ".voice_input"
+APP_DATA_NAME = "Vernest"
+CONFIG_SCHEMA_VERSION = 1
+
+
+def _app_data_root():
+    base = os.environ.get("APPDATA")
+    if base:
+        return Path(base) / APP_DATA_NAME
+    return Path.home() / ".vernest"
+
+
+CONFIG_DIR = _app_data_root()
+LOG_DIR = CONFIG_DIR / "logs"
 CONFIG_FILE = CONFIG_DIR / "config.json"
-LOG_FILE = CONFIG_DIR / "voice_input.log"
+LOG_FILE = LOG_DIR / "vernest.log"
+LEGACY_CONFIG_DIR = Path.home() / ".voice_input"
+LEGACY_CONFIG_FILE = LEGACY_CONFIG_DIR / "config.json"
 
 DEFAULT_CONFIG = {
+    "schema_version": CONFIG_SCHEMA_VERSION,
     "sample_rate": 16000,
     "channels": 1,
     "chunk_size": 1024,
@@ -599,7 +615,7 @@ def _resolve_model_dir():
             return d, tokens, model
     return None, None, None
 
-APP_NAME = "VoiceInput"
+APP_NAME = "Vernest"
 _RUN_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
 
 
@@ -650,6 +666,12 @@ ui_queue = queue_mod.Queue()
 
 def log(msg: str):
     try:
+        LOG_DIR.mkdir(parents=True, exist_ok=True)
+        if LOG_FILE.exists() and LOG_FILE.stat().st_size > 1024 * 1024:
+            rotated = LOG_DIR / "vernest.1.log"
+            if rotated.exists():
+                rotated.unlink()
+            LOG_FILE.replace(rotated)
         ts = time.strftime("%H:%M:%S")
         with open(LOG_FILE, "a", encoding="utf-8") as f:
             f.write(f"[{ts}] {msg}\n")
@@ -657,8 +679,21 @@ def log(msg: str):
         pass
 
 
+def _migrate_legacy_config_if_needed():
+    if CONFIG_FILE.exists() or not LEGACY_CONFIG_FILE.exists():
+        return
+    try:
+        CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(LEGACY_CONFIG_FILE, CONFIG_FILE)
+        log(f"已迁移旧配置: {LEGACY_CONFIG_FILE} -> {CONFIG_FILE}")
+    except Exception as e:
+        log(f"迁移旧配置失败: {e!r}")
+
+
 def load_config():
     CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+    LOG_DIR.mkdir(parents=True, exist_ok=True)
+    _migrate_legacy_config_if_needed()
     if CONFIG_FILE.exists():
         with open(CONFIG_FILE, "r", encoding="utf-8") as f:
             try:
@@ -672,6 +707,7 @@ def load_config():
         # 补全新字段
         for k, v in DEFAULT_CONFIG.items():
             next_config.setdefault(k, v)
+        next_config["schema_version"] = CONFIG_SCHEMA_VERSION
     else:
         next_config = DEFAULT_CONFIG.copy()
         with open(CONFIG_FILE, "w", encoding="utf-8") as f:
@@ -695,6 +731,8 @@ def load_config():
 
 def save_config():
     CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+    LOG_DIR.mkdir(parents=True, exist_ok=True)
+    config["schema_version"] = CONFIG_SCHEMA_VERSION
     with open(CONFIG_FILE, "w", encoding="utf-8") as f:
         json.dump(config, f, indent=2, ensure_ascii=False)
 

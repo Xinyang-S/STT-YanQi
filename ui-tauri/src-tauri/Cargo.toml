@@ -1,8 +1,10 @@
 [package]
-name = "ui-tauri"
-version = "0.1.0"
-description = "A Tauri App"
-authors = ["you"]
+name = "vernest-desktop"
+version = "0.6.7"
+description = "Vernest desktop voice input"
+authors = ["孙欣阳"]
+homepage = "https://github.com/Xinyang-S/STT-YanQi/tree/main"
+license = "MIT"
 edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
@@ -11,7 +13,7 @@ edition = "2021"
 # The `_lib` suffix may seem redundant but it is necessary
 # to make the lib name unique and wouldn't conflict with the bin name.
 # This seems to be only an issue on Windows, see https://github.com/rust-lang/cargo/issues/8519
-name = "ui_tauri_lib"
+name = "vernest_desktop_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]

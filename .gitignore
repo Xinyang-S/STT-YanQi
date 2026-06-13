@@ -8,6 +8,7 @@ YanQi-*/
 YanQi-*.zip
 言栖-*/
 言栖-*.zip
+release/
 
 # ── Python 缓存 ───────────────────────────────────────
 __pycache__/
