@@ -9,8 +9,7 @@ release assumptions, and future work here instead of leaving them only in chat.
 - [DEVELOPMENT.md](DEVELOPMENT.md): local setup, build commands, data directories, and regression focus.
 - [PRIVACY.md](PRIVACY.md): local-first privacy position and commercial privacy draft.
 - [RELEASE.md](RELEASE.md): installer, portable package, signing, and updater notes.
-- [LLM_POLISH_RESEARCH.md](LLM_POLISH_RESEARCH.md): small on-device LLM research and final model choice.
-- [LLM_POLISH_PLAN.md](LLM_POLISH_PLAN.md): STT text polishing implementation plan and test checklist.
+- [CLOUD_POLISH_PLAN.md](CLOUD_POLISH_PLAN.md): future cloud text-polishing provider plan.
 
 ## Current Product Direction
 
@@ -20,7 +19,7 @@ release assumptions, and future work here instead of leaving them only in chat.
 - Default posture: local-first, no automatic upload, optional network features must be explicit
 - Desktop shell: Tauri + React
 - System integration: Rust host owns tray, global shortcuts, prompt sounds, windows, and sidecar lifecycle
-- Voice runtime: Python sidecar owns recording, SenseVoice ASR, device enumeration, paste, and text polishing
+- Voice runtime: Python sidecar owns recording, SenseVoice ASR, device enumeration, and paste
 
 ## Knowledge Base Rules
 

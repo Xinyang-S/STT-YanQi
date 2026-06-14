@@ -8,7 +8,7 @@ voice-input/
 │   ├── src/                  # React UI
 │   └── src-tauri/            # Rust host: windows, tray, shortcuts, sounds
 ├── voice_backend.py          # Local HTTP sidecar
-├── voice_core/               # Recording, ASR, text polishing, paste runtime
+├── voice_core/               # Recording, ASR, paste runtime
 ├── packaging/pyinstaller/    # Python sidecar packaging
 ├── scripts/                  # Build, release, model helper scripts
 ├── models/                   # Local model files, not committed when large
@@ -23,10 +23,6 @@ Install Python dependencies:
 ```powershell
 pip install -r requirements.txt
 ```
-
-`requirements.txt` includes the official CPU wheel index for
-`llama-cpp-python`. This avoids Windows source builds and long-path extraction
-failures when installing the local text-polishing runtime.
 
 Install frontend dependencies:
 
@@ -82,34 +78,13 @@ ASR model:
 models\sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2024-07-17\
 ```
 
-LLM polishing model:
-
-```text
-models\polish\qwen2.5-0.5b-instruct-q4_k_m.gguf
-```
-
-Download the polishing model:
-
-```powershell
-.\scripts\download-polish-model.ps1
-```
-
-Install the polishing model into the user app data directory instead:
-
-```powershell
-.\scripts\download-polish-model.ps1 -AppData
-```
-
-The default development and release path is `models\polish\`, alongside the STT
-model directory. AppData is only a compatibility fallback for user-installed
-models. Large model files are ignored by git. The installer and portable package
-include `models\polish\qwen2.5-0.5b-instruct-q4_k_m.gguf` when that file exists
-in the repository working tree during `build-release.ps1`.
+There is no bundled local LLM polishing model. Future text polishing will be a
+cloud-provider feature and is tracked in `docs/CLOUD_POLISH_PLAN.md`.
 
 ## Runtime Boundaries
 
 - Rust host: window lifecycle, tray, close-to-tray, global shortcut hooks, prompt sounds, and sidecar lifecycle.
-- Python sidecar: local HTTP API, audio capture, device enumeration, ASR, text polishing, clipboard paste, and config persistence.
+- Python sidecar: local HTTP API, audio capture, device enumeration, ASR, clipboard paste, and config persistence.
 - React UI: liquid-glass shell, settings, appearance controls, device selection, diagnostics export, and shortcut capture UI.
 
 ## Regression Focus
@@ -123,4 +98,4 @@ Commercial-quality regression should prioritize:
 - Prompt sounds for press, release, enable, and pause
 - Shortcut customization with keyboard, mouse, and mixed combinations
 - Config migration and local logging
-- STT text polishing enabled, disabled, missing-model fallback, and successful local polish
+- Future cloud text-polishing settings remain disabled until the provider layer is implemented

@@ -1,6 +1,4 @@
 from pathlib import Path
-from PyInstaller.utils.hooks import collect_dynamic_libs
-
 ROOT = Path(SPECPATH).resolve().parents[1]
 
 hiddenimports = [
@@ -9,16 +7,12 @@ hiddenimports = [
     "comtypes",
     "sherpa_onnx",
     "soundfile",
-    "llama_cpp",
 ]
-
-llama_binaries = collect_dynamic_libs("llama_cpp", destdir="llama_cpp/lib")
-
 
 a = Analysis(
     [str(ROOT / "voice_backend.py")],
     pathex=[str(ROOT)],
-    binaries=llama_binaries,
+    binaries=[],
     datas=[],
     hiddenimports=hiddenimports,
     hookspath=[],

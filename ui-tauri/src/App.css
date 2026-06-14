@@ -826,6 +826,68 @@ button {
   transform: translateX(18px);
 }
 
+.cloud-polish-card {
+  display: grid;
+  gap: 12px;
+  padding: 14px 0;
+  border-bottom: 1px solid rgba(128, 155, 178, 0.18);
+}
+
+.cloud-polish-card span,
+.cloud-polish-card strong,
+.cloud-polish-card em {
+  display: block;
+}
+
+.cloud-polish-card strong {
+  color: #18304a;
+  font-size: 14px;
+}
+
+.cloud-polish-card em {
+  margin-top: 4px;
+  color: #708295;
+  font-size: 12px;
+  font-style: normal;
+}
+
+.cloud-polish-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+
+.cloud-polish-grid label {
+  display: grid;
+  gap: 5px;
+}
+
+.cloud-polish-grid label:last-child {
+  grid-column: 1 / -1;
+}
+
+.cloud-polish-grid small {
+  color: #62758b;
+  font-size: 11px;
+}
+
+.cloud-polish-grid select,
+.cloud-polish-grid input {
+  min-width: 0;
+  height: 34px;
+  border: 1px solid rgba(128, 155, 178, 0.24);
+  border-radius: 8px;
+  padding: 0 10px;
+  color: #6d7f91;
+  background: rgba(255, 255, 255, 0.5);
+}
+
+.cloud-polish-grid select:disabled,
+.cloud-polish-grid input:disabled {
+  cursor: not-allowed;
+  opacity: 0.72;
+}
+
 .shortcut-row {
   display: flex;
   align-items: center;

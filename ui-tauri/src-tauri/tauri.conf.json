@@ -45,8 +45,7 @@
       "../../models/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2024-07-17/model.int8.onnx": "models/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2024-07-17/model.int8.onnx",
       "../../models/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2024-07-17/tokens.txt": "models/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2024-07-17/tokens.txt",
       "../../models/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2024-07-17/README.md": "models/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2024-07-17/README.md",
-      "../../models/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2024-07-17/LICENSE": "models/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2024-07-17/LICENSE",
-      "../../models/polish/qwen2.5-0.5b-instruct-q4_k_m.gguf": "models/polish/qwen2.5-0.5b-instruct-q4_k_m.gguf"
+      "../../models/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2024-07-17/LICENSE": "models/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2024-07-17/LICENSE"
     },
     "icon": [
       "icons/32x32.png",

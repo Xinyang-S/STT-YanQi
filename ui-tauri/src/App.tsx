@@ -168,10 +168,6 @@ const fallbackState: BackendState = {
   floating_bubble: false,
   input_device_index: null,
   language: "auto",
-  polish_enabled: false,
-  polish_available: false,
-  polish_model: "qwen2.5-0.5b-instruct-q4_k_m.gguf",
-  polish_last_error: "",
 };
 
 const defaultAppearance: AppearanceConfig = {
@@ -329,20 +325,7 @@ function App() {
     state.last_text ||
     (state.last_error ? `错误: ${state.last_error}` : `按住 ${shortcut.label} 或点击中央液态麦克风开始。`);
 
-  const resultTitle =
-    state.polish_enabled && state.raw_text && state.last_text && state.raw_text !== state.last_text ? "润色结果" : "识别结果";
-
-  const polishStatusLabel = useMemo(() => {
-    if (!state.polish_enabled) return "已关闭";
-    if (state.polish_available) return "本地模型就绪";
-    return "等待模型";
-  }, [state.polish_available, state.polish_enabled]);
-
-  const polishSettingHint = useMemo(() => {
-    if (!state.polish_enabled) return "关闭后直接粘贴 STT 原文";
-    if (state.polish_available) return "修正标点、断句和轻微识别错字";
-    return state.polish_last_error || `请安装 ${state.polish_model}`;
-  }, [state.polish_available, state.polish_enabled, state.polish_last_error, state.polish_model]);
+  const resultTitle = "识别结果";
 
   const shellStyle = useMemo(() => {
     const alpha = appearance.opacity / 100;
@@ -623,8 +606,8 @@ function App() {
           <div className="mini glass">
             <Sparkles size={18} />
             <div>
-              <strong>本地润色</strong>
-              <span>{polishStatusLabel}</span>
+              <strong>云端润色</strong>
+              <span>规划中</span>
             </div>
           </div>
         </section>
@@ -694,17 +677,35 @@ function App() {
               />
             </label>
 
-            <label className="toggle-row">
+            <div className="cloud-polish-card">
               <span>
-                <strong>LLM 文本润色</strong>
-                <em>{polishSettingHint}</em>
+                <strong>云端大模型润色</strong>
+                <em>规划中：未来可接入官方 API，本版本暂不开放</em>
               </span>
-              <input
-                type="checkbox"
-                checked={state.polish_enabled}
-                onChange={(e) => post("/api/config", { polish_enabled: e.currentTarget.checked })}
-              />
-            </label>
+              <div className="cloud-polish-grid">
+                <label>
+                  <small>Provider</small>
+                  <select disabled defaultValue="openai">
+                    <option value="openai">OpenAI</option>
+                    <option value="anthropic">Anthropic</option>
+                    <option value="gemini">Google Gemini</option>
+                    <option value="deepseek">DeepSeek</option>
+                    <option value="qwen">Alibaba Qwen</option>
+                    <option value="moonshot">Moonshot</option>
+                    <option value="glm">Zhipu GLM</option>
+                    <option value="openrouter">OpenRouter</option>
+                  </select>
+                </label>
+                <label>
+                  <small>API Key</small>
+                  <input disabled type="password" placeholder="当前版本暂不支持" />
+                </label>
+                <label>
+                  <small>Model</small>
+                  <input disabled type="text" placeholder="由 provider 决定" />
+                </label>
+              </div>
+            </div>
 
             <div className={capturingShortcut ? "shortcut-row capturing" : "shortcut-row"}>
               <span>

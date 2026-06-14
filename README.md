@@ -86,13 +86,7 @@ npm run tauri -- dev
 .\scripts\build-release.ps1
 ```
 
-下载本地润色模型：
-
-```powershell
-.\scripts\download-polish-model.ps1
-```
-
-本地 LLM 润色默认关闭。用户可在设置中手动开启；如果本地 GGUF 模型或 `llama-cpp-python` 缺失，应用会自动回退为直接粘贴 STT 原文。
+文本润色能力规划为未来的云端大模型功能。当前版本不包含本地润色模型，也不会调用云端润色 API。
 
 ## 发布产物
 

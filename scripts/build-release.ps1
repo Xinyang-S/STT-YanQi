@@ -13,7 +13,6 @@ $PortableName = "Vernest"
 $PortableDir = Join-Path $ReleaseRoot $PortableName
 $PortableZip = Join-Path $ReleaseRoot "Vernest-$Version-windows-x64-portable.zip"
 $LegacyPortableDir = Join-Path $ReleaseRoot "Vernest-$Version-windows-x64-portable"
-$PolishModel = Join-Path $Root "models\polish\qwen2.5-0.5b-instruct-q4_k_m.gguf"
 
 function Invoke-Native {
   param(
@@ -45,15 +44,26 @@ function Stop-VernestBuildProcesses {
   Start-Sleep -Milliseconds 300
 }
 
+function Remove-StalePolishModelArtifacts {
+  foreach ($Path in @(
+    (Join-Path $TauriRelease "models\polish"),
+    (Join-Path $TauriRelease "resources\models\polish"),
+    (Join-Path $ReleaseRoot "Vernest-no-polish-model")
+  )) {
+    if (Test-Path -LiteralPath $Path) {
+      Remove-Item -LiteralPath $Path -Recurse -Force
+    }
+  }
+  Get-ChildItem -LiteralPath $ReleaseRoot -File -Filter "*no-polish-model*" -ErrorAction SilentlyContinue |
+    Remove-Item -Force
+}
+
 if (-not $SkipBackend) {
   & (Join-Path $PSScriptRoot "build-backend.ps1")
 }
 
-if (-not (Test-Path -LiteralPath $PolishModel)) {
-  throw "Polish model not found: $PolishModel. Run .\scripts\download-polish-model.ps1 first."
-}
-
 Stop-VernestBuildProcesses
+Remove-StalePolishModelArtifacts
 
 Push-Location $Ui
 try {
@@ -71,10 +81,13 @@ if ($SkipPortable) {
 }
 
 New-Item -ItemType Directory -Force -Path $ReleaseRoot | Out-Null
-Get-ChildItem -LiteralPath $ReleaseRoot -File -Filter "言栖_*_x64-setup.exe" -ErrorAction SilentlyContinue |
-  Remove-Item -Force
-Get-ChildItem -LiteralPath $ReleaseRoot -File -Filter "Vernest-*-windows-x64-portable.zip" -ErrorAction SilentlyContinue |
-  Remove-Item -Force
+$InstallerTargetName = "言栖_$($Version)_x64-setup.exe"
+$InstallerTarget = Join-Path $ReleaseRoot $InstallerTargetName
+foreach ($Path in @($InstallerTarget, $PortableZip)) {
+  if (Test-Path -LiteralPath $Path) {
+    Remove-Item -LiteralPath $Path -Force
+  }
+}
 if (Test-Path -LiteralPath $PortableDir) {
   Remove-Item -LiteralPath $PortableDir -Recurse -Force
 }
@@ -87,7 +100,6 @@ $InstallerSource = Get-ChildItem -LiteralPath (Join-Path $TauriRelease "bundle\n
   Sort-Object LastWriteTime -Descending |
   Select-Object -First 1
 if ($InstallerSource) {
-  $InstallerTarget = Join-Path $ReleaseRoot $InstallerSource.Name
   Copy-Item -LiteralPath $InstallerSource.FullName -Destination $InstallerTarget -Force
   Write-Host "Installer:" $InstallerTarget
 }
@@ -118,12 +130,6 @@ foreach ($Name in @("models", "resources")) {
   if (Test-Path -LiteralPath $Source) {
     Copy-Item -LiteralPath $Source -Destination (Join-Path $PortableDir $Name) -Recurse -Force
   }
-}
-
-if (Test-Path -LiteralPath $PolishModel) {
-  $PolishTarget = Join-Path $PortableDir "models\polish"
-  New-Item -ItemType Directory -Force -Path $PolishTarget | Out-Null
-  Copy-Item -LiteralPath $PolishModel -Destination (Join-Path $PolishTarget (Split-Path -Leaf $PolishModel)) -Force
 }
 
 foreach ($Name in @("README.md", "LICENSE", "THIRD_PARTY_NOTICES.md")) {

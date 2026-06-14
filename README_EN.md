@@ -86,13 +86,7 @@ Build the installer and portable zip:
 .\scripts\build-release.ps1
 ```
 
-Download the local text-polishing model:
-
-```powershell
-.\scripts\download-polish-model.ps1
-```
-
-Local LLM text polishing is disabled by default. Users can enable it manually in Settings; if the local GGUF model or `llama-cpp-python` is missing, Vernest falls back to pasting the raw STT result.
+Text polishing is planned as a future cloud-model feature. The current release does not bundle a local polishing model and does not call any cloud polishing API.
 
 ## Release Artifacts
 

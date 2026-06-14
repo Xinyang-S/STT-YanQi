@@ -57,10 +57,6 @@ class BackendState:
             "floating_bubble": bool(core.config.get("floating_bubble", False)),
             "input_device_index": core.config.get("input_device_index"),
             "language": core.config.get("language", "auto"),
-            "polish_enabled": bool(core.config.get("polish_enabled", False)),
-            "polish_available": bool(core.state.get("polish_available")),
-            "polish_model": core.state.get("polish_model") or core.POLISH_MODEL_FILE,
-            "polish_last_error": core.state.get("polish_last_error") or "",
         }
 
 
@@ -179,14 +175,8 @@ class Handler(BaseHTTPRequestHandler):
                     core.config["exclusive_device"] = bool(data["exclusive_device"])
                 if "floating_bubble" in data:
                     core.config["floating_bubble"] = bool(data["floating_bubble"])
-                if "polish_enabled" in data:
-                    core.config["polish_enabled"] = bool(data["polish_enabled"])
-                    core.state["polish_enabled"] = bool(data["polish_enabled"])
-                    if not core.config["polish_enabled"]:
-                        core.unload_polish_model()
                 if "input_device_index" in data:
                     core.config["input_device_index"] = data["input_device_index"]
-                core.refresh_polish_state()
                 core.save_config()
                 backend_state.touch("config")
                 self._send({"ok": True, "state": backend_state.snapshot()})

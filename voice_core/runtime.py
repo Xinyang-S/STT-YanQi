@@ -7,7 +7,6 @@ shells that need the recording/ASR backend.
 """
 
 import ctypes
-import gc
 import json
 import os
 import re
@@ -462,10 +461,6 @@ DEFAULT_CONFIG = {
     "floating_bubble": False,  # 关闭主窗口后是否显示悬浮气泡 (默认关闭)
     "bubble_x": None,           # 气泡 X 坐标 (持久化); None = 屏幕右侧默认
     "bubble_y": None,           # 气泡 Y 坐标 (持久化)
-    "polish_enabled": False,     # 本地 LLM 润色默认关闭; 小模型可能改写关键语义
-    "polish_model_path": "",     # 留空时按默认目录搜索 GGUF 模型
-    "polish_max_tokens": 160,
-    "polish_temperature": 0.1,
 }
 
 # sherpa-onnx SenseVoice 多语种模型 (int8) — 离线本地引擎, 唯一识别后端
@@ -475,67 +470,6 @@ SHERPA_SENSE_VOICE_URL = (
     "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/"
     "sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2024-07-17.tar.bz2"
 )
-
-POLISH_MODEL_REPO = "Qwen/Qwen2.5-0.5B-Instruct-GGUF"
-POLISH_MODEL_FILE = "qwen2.5-0.5b-instruct-q4_k_m.gguf"
-POLISH_MODEL_URL = (
-    "https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct-GGUF/resolve/main/"
-    "qwen2.5-0.5b-instruct-q4_k_m.gguf"
-)
-POLISH_MODEL_SIZE_BYTES = 491_400_032
-SELF_REPAIR_MARKERS = ("不对", "不是")
-SELF_REPAIR_ACTION_CUES = (
-    "去", "到", "在", "用", "把", "给", "发给", "打开", "运行", "输入", "搜索",
-    "选择", "设置", "切换", "改为", "改成", "叫", "发", "写", "删", "复制",
-)
-POLISH_SYSTEM_PROMPT = (
-    "你是离线 ASR 文本后处理器，不是聊天助手、翻译器或总结器。任务是把语音识别文本做保守清理。\n"
-    "硬性规则：\n"
-    "1. 只输出润色后的文本，不解释，不加标题，不使用 Markdown，不要回复“好的/可以/明白”。\n"
-    "2. 禁止翻译，不要翻译。输入里的英文、code-switching、品牌、代码、路径、命令、缩写、库名、专业词必须保留原语言。\n"
-    "3. 保持原文意图和事实，不新增信息，不扩写，不总结，不替用户下结论。\n"
-    "4. 保留否定词、程度词、时间、数字、比例、单位、人名、地名、动作和对象；不要为了流畅删掉这些内容。\n"
-    "5. 保留转折、限定和纠正结构，如“不是...而是...、但是、只是、不过”，不能删掉后半句动作。\n"
-    "6. 保留否定动作的对象，不要把“禁用 A，不要禁用 B”改成“不要禁用 A”。\n"
-    "7. 不要随意替换动词或关键词，例如“修”不要改成“进行”，“重新打包”不要改成“再打包”。\n"
-    "8. 只修正标点、断句、英文大小写、明显漏字/多字/同音近音识别错误；不确定时保留原文。\n"
-    "9. 删除无语义填充词，如“嗯、呃、啊、um、uh、er”；删除明显重复开头。\n"
-    "10. 遇到自我纠正标记，如“不对、不是、改成、应该是、no、I mean、rather”，保留最后明确版本。\n"
-    "11. 如果文本已经足够好，原样输出。\n"
-    "反例：local polish 不能译成“当地波兰语”；terminal 不能译成“终端”；百分之五十、不要删除旧日志不能省略。"
-)
-POLISH_USER_PREFIX = "原始 ASR 文本：\n"
-_LLAMA_CPP_IMPORT_ERROR = ""
-_ENGLISH_FILLERS_RE = re.compile(r"\b(?:um|uh|er)\b[,\s]*", re.I)
-_CJK_RE = re.compile(r"[\u4e00-\u9fff]")
-_ASCII_TOKEN_RE = re.compile(
-    r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}|"
-    r"https?://[^\s，。；;]+|"
-    r"[A-Za-z]:\\[^\s，。；;]+|"
-    r"[A-Za-z][A-Za-z0-9_+.-]*"
-)
-_NEGATION_RE = re.compile(r"不要|不能|不会|不需要|没有|别|不")
-_PERCENT_CN_RE = re.compile(r"百分之[零〇一二三四五六七八九十百千万两\d]+")
-_IMPORTANT_CN_MARKERS = ("重新", "清掉")
-_CONTRAST_MARKERS = ("而是", "但是", "只是", "不过")
-_NEGATION_MARKERS = ("没有必要", "不需要", "不要", "不能", "不会", "不是", "没有", "别", "不")
-_PROTECTED_PHRASE_STOPS = (
-    "而是", "但是", "只是", "不过", "然后", "最后", "接着",
-    "也不要", "也不能", "也不会", "也不需要", "也不是", "也没有",
-    "先不要", "再不要", "先不能", "再不能", "先不", "再不",
-    "先", "再", "就",
-)
-_PROTECTED_PUNCTUATION = " \t\r\n，。,.！!？?；;：:\"'“”‘’、（）()【】[]{}<>《》"
-_GUARD_COMPACT_RE = re.compile(r"[\s，。,.！!？?；;：:\"'“”‘’、（）()【】\[\]{}<>《》]+")
-_KNOWN_ASR_REPLACEMENTS = (
-    ("缓存青掉", "缓存清掉"),
-    ("青掉", "清掉"),
-)
-_TOKEN_NORMALIZATIONS = {
-    "github": "GitHub",
-    "readme": "README",
-}
-
 
 def _resolve_model_dir():
     """解析本地模型目录. 优先级:
@@ -568,50 +502,6 @@ def _resolve_model_dir():
         if os.path.isfile(tokens) and os.path.isfile(model):
             return d, tokens, model
     return None, None, None
-
-
-def _resolve_polish_model_path():
-    """Return the local GGUF path for STT text polishing, if installed."""
-    candidates = []
-    cfg_path = config.get("polish_model_path", "") if isinstance(config.get("polish_model_path"), str) else ""
-    if cfg_path:
-        candidates.append(Path(cfg_path))
-
-    meipass = getattr(sys, "_MEIPASS", None)
-    if meipass:
-        candidates.append(Path(meipass) / "models" / "polish" / POLISH_MODEL_FILE)
-        candidates.append(Path(meipass) / "models" / POLISH_MODEL_FILE)
-
-    if getattr(sys, "frozen", False):
-        exe_dir = Path(sys.executable).resolve().parent
-        candidates.append(exe_dir / "models" / "polish" / POLISH_MODEL_FILE)
-        candidates.append(exe_dir / "resources" / "models" / "polish" / POLISH_MODEL_FILE)
-        candidates.append(exe_dir / "models" / POLISH_MODEL_FILE)
-
-    cwd = Path(os.getcwd())
-    candidates.append(cwd / "models" / "polish" / POLISH_MODEL_FILE)
-    candidates.append(cwd / "models" / POLISH_MODEL_FILE)
-    candidates.append(CONFIG_DIR / "models" / "polish" / POLISH_MODEL_FILE)
-
-    for path in candidates:
-        try:
-            if path.is_file():
-                return str(path)
-        except OSError:
-            continue
-    return ""
-
-
-def _has_llama_cpp():
-    global _LLAMA_CPP_IMPORT_ERROR
-    try:
-        from llama_cpp import Llama  # noqa: F401
-        _LLAMA_CPP_IMPORT_ERROR = ""
-        return True
-    except Exception as exc:
-        _LLAMA_CPP_IMPORT_ERROR = f"{type(exc).__name__}: {exc}"
-        return False
-
 
 APP_NAME = "Vernest"
 _RUN_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
@@ -658,9 +548,7 @@ def set_auto_start(enabled: bool):
 config = {}
 state = {"enabled": True, "recording": False, "engine": "none",
          "last_text": "", "raw_text": "", "last_error": "", "audio_mode": "共享",
-         "mic_guarded": False, "exclusive": True,
-         "polish_enabled": False, "polish_available": False,
-         "polish_model": "", "polish_last_error": ""}
+         "mic_guarded": False, "exclusive": True}
 ui_queue = queue_mod.Queue()
 
 
@@ -677,35 +565,6 @@ def log(msg: str):
             f.write(f"[{ts}] {msg}\n")
     except Exception:
         pass
-
-
-def _refresh_polish_state(log_reasons=False):
-    enabled = bool(config.get("polish_enabled", False))
-    model_path = _resolve_polish_model_path()
-    has_runtime = _has_llama_cpp()
-
-    state["polish_enabled"] = enabled
-    state["polish_available"] = bool(model_path and has_runtime)
-    state["polish_model"] = os.path.basename(model_path) if model_path else POLISH_MODEL_FILE
-
-    if state["polish_available"] or not enabled:
-        state["polish_last_error"] = ""
-        return
-
-    reasons = []
-    if not has_runtime:
-        detail = f" ({_LLAMA_CPP_IMPORT_ERROR})" if _LLAMA_CPP_IMPORT_ERROR else ""
-        reasons.append(f"llama-cpp-python 不可用{detail}")
-    if not model_path:
-        reasons.append(f"模型文件缺失: {POLISH_MODEL_FILE}")
-    state["polish_last_error"] = "; ".join(reasons)
-    if log_reasons:
-        log(f"本地润色不可用: {state['polish_last_error']}")
-
-
-def refresh_polish_state(log_reasons=False):
-    _refresh_polish_state(log_reasons=log_reasons)
-
 
 def _migrate_legacy_config_if_needed():
     if CONFIG_FILE.exists() or not LEGACY_CONFIG_FILE.exists():
@@ -734,14 +593,15 @@ def load_config():
         except (TypeError, ValueError):
             saved_schema = 0
         next_config = {**DEFAULT_CONFIG, **saved}
-        # 清理旧版字段 (baidu / iflytek / local_asr)
-        for k in ("baidu", "iflytek", "local_asr"):
+        # 清理旧版字段
+        for k in (
+            "baidu", "iflytek", "local_asr",
+            "polish_enabled", "polish_model_path", "polish_max_tokens", "polish_temperature",
+        ):
             next_config.pop(k, None)
         # 补全新字段
         for k, v in DEFAULT_CONFIG.items():
             next_config.setdefault(k, v)
-        if saved_schema < 3:
-            next_config["polish_enabled"] = False
         next_config["schema_version"] = CONFIG_SCHEMA_VERSION
     else:
         next_config = DEFAULT_CONFIG.copy()
@@ -761,7 +621,6 @@ def load_config():
         if not _HAS_SHERPA: reasons.append("sherpa-onnx 未安装")
         if d is None:       reasons.append(f"模型文件缺失 (需要 {SHERPA_SENSE_VOICE_MODEL})")
         log(f"本地引擎不可用: {'; '.join(reasons)}")
-    _refresh_polish_state(log_reasons=True)
     return has_local
 
 
@@ -917,320 +776,6 @@ class ASRManager:
 
     def count(self):
         return len(self.engines)
-
-
-# ═══════════════════════════════════════════════════════════
-#  STT 文本润色: llama.cpp + Qwen2.5-0.5B-Instruct GGUF
-# ═══════════════════════════════════════════════════════════
-class LocalTextPolisher:
-    """Small local LLM used only after ASR, with fail-open behavior."""
-
-    _shared_lock = threading.Lock()
-    _shared = None
-    _shared_path = ""
-
-    @classmethod
-    def unload_shared(cls):
-        with cls._shared_lock:
-            cls._shared = None
-            cls._shared_path = ""
-        gc.collect()
-
-    def __init__(self, model_path):
-        self.model_path = model_path
-        self._llm = None
-        self.max_tokens = max(32, min(512, int(config.get("polish_max_tokens", 160) or 160)))
-        self.temperature = max(0.0, min(1.0, float(config.get("polish_temperature", 0.1) or 0.1)))
-
-    def _ensure_loaded(self):
-        if self._llm is not None:
-            return self._llm
-        if not self.model_path or not os.path.isfile(self.model_path):
-            raise FileNotFoundError(f"润色模型文件缺失: {POLISH_MODEL_FILE}")
-        try:
-            from llama_cpp import Llama
-        except Exception as exc:
-            raise RuntimeError(f"llama-cpp-python 不可用，无法加载本地润色模型: {exc}") from exc
-
-        with LocalTextPolisher._shared_lock:
-            if LocalTextPolisher._shared is not None and LocalTextPolisher._shared_path == self.model_path:
-                self._llm = LocalTextPolisher._shared
-                return self._llm
-
-            log(f"本地润色加载模型: {self.model_path}")
-            llm = Llama(
-                model_path=self.model_path,
-                n_ctx=2048,
-                n_batch=256,
-                n_threads=max(1, min(4, os.cpu_count() or 4)),
-                n_gpu_layers=0,
-                use_mmap=True,
-                verbose=False,
-            )
-            LocalTextPolisher._shared = llm
-            LocalTextPolisher._shared_path = self.model_path
-            self._llm = llm
-            log("本地润色模型就绪")
-            return self._llm
-
-    @staticmethod
-    def _clean_response(text):
-        value = re.sub(r"<think>.*?</think>", "", text or "", flags=re.S | re.I).strip()
-        value = re.sub(r"^```(?:\w+)?", "", value).strip()
-        value = re.sub(r"```$", "", value).strip()
-        value = re.sub(r"^(润色后|结果|输出)[:：]\s*", "", value).strip()
-        return value.strip("\"'“”‘’ \t\r\n")
-
-    @staticmethod
-    def _strip_added_acknowledgement(raw, polished):
-        raw_value = (raw or "").lstrip()
-        if raw_value.startswith(("好的", "可以", "当然", "明白", "收到")):
-            return polished
-        return re.sub(r"^(好的|可以|当然|明白|收到)[，,。.\s]+", "", polished or "").strip()
-
-    @staticmethod
-    def _apply_known_asr_replacements(text):
-        value = text or ""
-        for old, new in _KNOWN_ASR_REPLACEMENTS:
-            value = value.replace(old, new)
-        return value
-
-    @staticmethod
-    def _normalize_known_tokens(text):
-        value = text or ""
-        for source, target in _TOKEN_NORMALIZATIONS.items():
-            value = re.sub(rf"\b{re.escape(source)}\b", target, value, flags=re.I)
-        return value
-
-    @staticmethod
-    def _remove_fillers(text):
-        value = _ENGLISH_FILLERS_RE.sub("", text or "")
-        value = re.sub(r"[嗯呃啊]+", "", value)
-        value = re.sub(r"\s{2,}", " ", value)
-        value = re.sub(r"\s+([，,。.!?？；;])", r"\1", value)
-        return value.strip(" \t\r\n，,")
-
-    @staticmethod
-    def _apply_self_repair_hints(text):
-        value = (text or "").strip()
-        value = re.sub(
-            r"\b(to|for|with|from|at|in|on)\s+[A-Za-z][\w.+-]*\s+no[,\s]+i\s+mean\s+([A-Za-z][\w.+-]*)",
-            r"\1 \2",
-            value,
-            flags=re.I,
-        )
-        for marker in SELF_REPAIR_MARKERS:
-            idx = value.find(marker)
-            if idx < 0:
-                continue
-            prefix = value[:idx]
-            suffix = value[idx + len(marker):].lstrip(" ，,。.;；")
-            if not prefix or not suffix:
-                continue
-
-            replace_from = -1
-            search_from = max(0, len(prefix) - 24)
-            for cue in SELF_REPAIR_ACTION_CUES:
-                if suffix.startswith(cue):
-                    pos = prefix.rfind(cue, search_from)
-                    if pos >= 0:
-                        replace_from = pos
-                        break
-
-            if replace_from >= 0:
-                value = (prefix[:replace_from] + suffix).strip()
-        return value
-
-    @classmethod
-    def _minimal_safe_polish(cls, text):
-        value = cls._apply_self_repair_hints(text)
-        value = cls._apply_known_asr_replacements(value)
-        value = cls._remove_fillers(value)
-        value = cls._normalize_known_tokens(value)
-        return value
-
-    @staticmethod
-    def _meaningful_ascii_tokens(text):
-        tokens = []
-        for token in _ASCII_TOKEN_RE.findall(text or ""):
-            lower = token.lower()
-            if lower in {"um", "uh", "er", "no", "i", "mean"}:
-                continue
-            tokens.append(lower)
-        return tokens
-
-    @staticmethod
-    def _compact_for_guard(text):
-        return _GUARD_COMPACT_RE.sub("", text or "").lower()
-
-    @staticmethod
-    def _protected_phrase_end(value, start):
-        end = len(value)
-        for i in range(start, len(value)):
-            if value[i] in _PROTECTED_PUNCTUATION:
-                end = i
-                break
-
-        search_from = max(0, start)
-        for stop in _PROTECTED_PHRASE_STOPS:
-            pos = value.find(stop, search_from)
-            if pos >= 0:
-                end = min(end, pos)
-
-        return min(end, start + 28)
-
-    @classmethod
-    def _protected_negation_phrases(cls, text):
-        value = text or ""
-        phrases = []
-        for marker in _NEGATION_MARKERS:
-            start = 0
-            while True:
-                idx = value.find(marker, start)
-                if idx < 0:
-                    break
-                end = cls._protected_phrase_end(value, idx + len(marker))
-                phrase = value[idx:end].strip(_PROTECTED_PUNCTUATION)
-                if len(cls._compact_for_guard(phrase)) > len(marker):
-                    phrases.append(phrase)
-                start = idx + len(marker)
-        return phrases
-
-    @classmethod
-    def _protected_contrast_phrases(cls, text):
-        value = text or ""
-        phrases = []
-        for marker in _CONTRAST_MARKERS:
-            start = 0
-            while True:
-                idx = value.find(marker, start)
-                if idx < 0:
-                    break
-                end = cls._protected_phrase_end(value, idx + len(marker))
-                phrase = value[idx:end].strip(_PROTECTED_PUNCTUATION)
-                if len(cls._compact_for_guard(phrase)) > len(marker):
-                    phrases.append(phrase)
-                start = idx + len(marker)
-        return phrases
-
-    @classmethod
-    def _preserves_protected_content(cls, source, candidate):
-        source_value = source or ""
-        candidate_value = candidate or ""
-        source_lower = source_value.lower()
-        candidate_lower = candidate_value.lower()
-        candidate_compact = cls._compact_for_guard(candidate_value)
-
-        source_has_cjk = bool(_CJK_RE.search(source_value))
-        candidate_has_cjk = bool(_CJK_RE.search(candidate_value))
-        if not source_has_cjk and candidate_has_cjk:
-            return False
-
-        for token in cls._meaningful_ascii_tokens(source_value):
-            if token not in candidate_lower:
-                return False
-
-        if len(_NEGATION_RE.findall(candidate_value)) < len(_NEGATION_RE.findall(source_value)):
-            return False
-
-        for phrase in _PERCENT_CN_RE.findall(source_value):
-            if phrase not in candidate_value:
-                return False
-
-        for marker in _CONTRAST_MARKERS:
-            if marker in source_value and marker not in candidate_value:
-                return False
-
-        for phrase in cls._protected_negation_phrases(source_value):
-            if cls._compact_for_guard(phrase) not in candidate_compact:
-                return False
-
-        for phrase in cls._protected_contrast_phrases(source_value):
-            if cls._compact_for_guard(phrase) not in candidate_compact:
-                return False
-
-        for marker in _IMPORTANT_CN_MARKERS:
-            if marker in source_value and marker not in candidate_value:
-                return False
-
-        if len(candidate_value) < max(4, int(len(source_value) * 0.55)):
-            return False
-
-        return True
-
-    def polish(self, text):
-        raw = (text or "").strip()
-        if len(raw) < 3:
-            return raw
-
-        llm = self._ensure_loaded()
-        prompt_input = self._minimal_safe_polish(raw)
-        messages = [
-            {
-                "role": "system",
-                "content": POLISH_SYSTEM_PROMPT,
-            },
-            {"role": "user", "content": f"{POLISH_USER_PREFIX}{prompt_input}"},
-        ]
-
-        result = llm.create_chat_completion(
-            messages=messages,
-            max_tokens=self.max_tokens,
-            temperature=self.temperature,
-            top_p=0.8,
-        )
-        choice = (result.get("choices") or [{}])[0]
-        message = choice.get("message") or {}
-        polished = self._clean_response(message.get("content") or choice.get("text") or "")
-        polished = self._strip_added_acknowledgement(raw, polished)
-        polished = self._normalize_known_tokens(self._remove_fillers(polished))
-
-        if not polished:
-            return prompt_input
-        if len(polished) > max(80, len(raw) * 4):
-            log(f"本地润色输出过长，回退原文: raw={len(raw)} polished={len(polished)}")
-            return prompt_input
-        if not self._preserves_protected_content(prompt_input, polished):
-            log(f"本地润色未通过保真校验，使用安全润色: {polished}")
-            return prompt_input
-        return polished
-
-
-def polish_text_if_enabled(text):
-    raw = (text or "").strip()
-    state["raw_text"] = raw
-    _refresh_polish_state()
-
-    if not bool(config.get("polish_enabled", False)) or not raw:
-        return raw
-
-    model_path = _resolve_polish_model_path()
-    if not model_path:
-        state["polish_available"] = False
-        state["polish_last_error"] = f"模型文件缺失: {POLISH_MODEL_FILE}"
-        log(f"本地润色跳过: {state['polish_last_error']}")
-        return raw
-
-    try:
-        polished = LocalTextPolisher(model_path).polish(raw)
-        state["polish_enabled"] = True
-        state["polish_available"] = True
-        state["polish_model"] = os.path.basename(model_path)
-        state["polish_last_error"] = ""
-        if polished != raw:
-            log(f"[polish] {polished}")
-        return polished
-    except Exception as exc:
-        state["polish_available"] = False
-        state["polish_last_error"] = str(exc)
-        log(f"本地润色失败，使用识别原文: {exc!r}")
-        return raw
-
-
-def unload_polish_model():
-    LocalTextPolisher.unload_shared()
-    state["polish_available"] = bool(_resolve_polish_model_path() and _has_llama_cpp())
-    log("本地润色模型已卸载")
 
 
 # ═══════════════════════════════════════════════════════════
@@ -1508,7 +1053,8 @@ def recording_flow():
         try:
             raw_txt, eng = asr.transcribe(apath)
             log(f"[{eng}] {raw_txt}")
-            txt = polish_text_if_enabled(raw_txt)
+            txt = raw_txt
+            state["raw_text"] = raw_txt
             state["last_text"] = txt; state["last_error"] = ""
             ui_queue.put(("result", txt)); ui_queue.put(("status", f"{eng} ({rec.mode}): {txt}"))
             _paste_count += 1

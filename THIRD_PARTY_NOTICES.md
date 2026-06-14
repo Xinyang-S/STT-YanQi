@@ -13,8 +13,6 @@ Vernest uses open-source components and local speech models.
 
 - sherpa-onnx: Apache-2.0
 - SenseVoice model files: see `models/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2024-07-17/LICENSE`
-- llama-cpp-python: MIT
-- Qwen2.5-0.5B-Instruct-GGUF: Apache-2.0, see `Qwen/Qwen2.5-0.5B-Instruct-GGUF`
 - PyAudio, NumPy, pyperclip, comtypes and soundfile: see each package license
 
 ## Privacy

@@ -10,7 +10,7 @@ The Rust host owns OS integration: transparent windows, tray, global keyboard
 and mouse hooks, prompt sounds, close-to-tray behavior, and sidecar lifecycle.
 
 The Python sidecar owns audio capture, device enumeration, ASR, paste behavior,
-STT text polishing, and voice configuration. It listens on `127.0.0.1:47632`.
+and voice configuration. It listens on `127.0.0.1:47632`.
 
 Each app launch generates a local-only token. The sidecar requires
 `X-Vernest-Token` for control APIs. `/api/health` is intentionally unauthenticated
@@ -28,11 +28,9 @@ Current module debt to continue reducing:
 AudioRecorder
   -> ASRManager / sherpa-onnx SenseVoice
   -> raw_text
-  -> LocalTextPolisher / llama-cpp-python / Qwen2.5-0.5B GGUF
   -> last_text
   -> paste_text()
 ```
 
-The polishing stage is optional and fail-open. If `llama-cpp-python` or the
-GGUF model is unavailable, Vernest keeps the STT result and continues the paste
-flow.
+The current release does not run text polishing. Future polishing is planned as
+an explicit cloud-provider feature, not a bundled local model.

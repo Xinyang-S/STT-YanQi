@@ -7,8 +7,5 @@ pillow
 pystray
 pyinstaller
 sherpa-onnx
-# 本地 STT 文本润色 (GGUF / llama.cpp); 缺失时应用会回退到 STT 原文
---extra-index-url https://abetlen.github.io/llama-cpp-python/whl/cpu
-llama-cpp-python
 # sherpa-onnx 需要 libsndfile (soundfile 读取 WAV); PyInstaller 不需要
 soundfile
