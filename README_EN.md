@@ -4,7 +4,7 @@
 
 Vernest, known as 言栖 in Chinese, is a Windows desktop voice input tool. Hold a shortcut to record, release it to transcribe locally, and paste the result into the current cursor position.
 
-Current version: `0.6.7`  
+Current version: `0.8.1`  
 Author: 孙欣阳  
 Project homepage: <https://github.com/Xinyang-S/STT-YanQi/tree/main>  
 Copyright: Copyright © 2026 孙欣阳. All rights reserved.
@@ -13,7 +13,7 @@ Copyright: Copyright © 2026 孙欣阳. All rights reserved.
 
 ## Product Principles
 
-- Local offline recognition. Audio, transcripts, and diagnostics are not uploaded.
+- Local recognition by default. Vernest does not automatically upload audio, transcripts, or diagnostics; any future cloud enhancement must be explicitly enabled by the user.
 - Logs are written locally to `%APPDATA%\Vernest\logs\vernest.log`.
 - Diagnostics are exported only when the user explicitly clicks export.
 - Supported platforms: Windows 10 / Windows 11 x64.
@@ -36,6 +36,8 @@ voice-input/
 The Rust host owns OS integration: windows, tray, global shortcuts, prompt sounds, and sidecar lifecycle. The Python sidecar owns local audio capture, SenseVoice recognition, microphone device enumeration, and voice configuration.
 
 The app communicates with the sidecar through `127.0.0.1:47632`. Each launch generates a temporary `X-Vernest-Token`, so ordinary local webpages cannot directly control the recording API.
+
+See [docs/INDEX.md](docs/INDEX.md) for the project knowledge base.
 
 ## Data Directory
 
@@ -84,18 +86,32 @@ Build the installer and portable zip:
 .\scripts\build-release.ps1
 ```
 
+Download the local text-polishing model:
+
+```powershell
+.\scripts\download-polish-model.ps1
+```
+
+Local LLM text polishing is disabled by default. Users can enable it manually in Settings; if the local GGUF model or `llama-cpp-python` is missing, Vernest falls back to pasting the raw STT result.
+
 ## Release Artifacts
 
-NSIS installer:
+Shallow NSIS installer:
 
 ```text
-ui-tauri\src-tauri\target\release\bundle\nsis\言栖_0.6.7_x64-setup.exe
+release\言栖_0.8.1_x64-setup.exe
+```
+
+Shallow portable app:
+
+```text
+release\Vernest\Vernest.exe
 ```
 
 Portable zip:
 
 ```text
-release\Vernest-0.6.7-windows-x64-portable.zip
+release\Vernest-0.8.1-windows-x64-portable.zip
 ```
 
 Code signing placeholder:

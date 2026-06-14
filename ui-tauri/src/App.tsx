@@ -160,6 +160,7 @@ const fallbackState: BackendState = {
   recording: false,
   engine: "none",
   last_text: "",
+  raw_text: "",
   last_error: "",
   audio_mode: "共享",
   mic_guarded: false,
@@ -167,6 +168,10 @@ const fallbackState: BackendState = {
   floating_bubble: false,
   input_device_index: null,
   language: "auto",
+  polish_enabled: false,
+  polish_available: false,
+  polish_model: "qwen2.5-0.5b-instruct-q4_k_m.gguf",
+  polish_last_error: "",
 };
 
 const defaultAppearance: AppearanceConfig = {
@@ -323,6 +328,21 @@ function App() {
   const resultText =
     state.last_text ||
     (state.last_error ? `错误: ${state.last_error}` : `按住 ${shortcut.label} 或点击中央液态麦克风开始。`);
+
+  const resultTitle =
+    state.polish_enabled && state.raw_text && state.last_text && state.raw_text !== state.last_text ? "润色结果" : "识别结果";
+
+  const polishStatusLabel = useMemo(() => {
+    if (!state.polish_enabled) return "已关闭";
+    if (state.polish_available) return "本地模型就绪";
+    return "等待模型";
+  }, [state.polish_available, state.polish_enabled]);
+
+  const polishSettingHint = useMemo(() => {
+    if (!state.polish_enabled) return "关闭后直接粘贴 STT 原文";
+    if (state.polish_available) return "修正标点、断句和轻微识别错字";
+    return state.polish_last_error || `请安装 ${state.polish_model}`;
+  }, [state.polish_available, state.polish_enabled, state.polish_last_error, state.polish_model]);
 
   const shellStyle = useMemo(() => {
     const alpha = appearance.opacity / 100;
@@ -600,12 +620,19 @@ function App() {
               <span>{state.mic_guarded ? "默认麦克风已隔离" : state.audio_mode}</span>
             </div>
           </div>
+          <div className="mini glass">
+            <Sparkles size={18} />
+            <div>
+              <strong>本地润色</strong>
+              <span>{polishStatusLabel}</span>
+            </div>
+          </div>
         </section>
 
         <section className="result glass">
           <div className="section-title">
             <AudioLines size={17} />
-            <span>识别结果</span>
+            <span>{resultTitle}</span>
             <button className="icon-button" onClick={copyResult} disabled={!state.last_text}>
               {copied ? <Check size={17} /> : <Copy size={17} />}
             </button>
@@ -664,6 +691,18 @@ function App() {
                 type="checkbox"
                 checked={state.floating_bubble}
                 onChange={(e) => post("/api/config", { floating_bubble: e.currentTarget.checked })}
+              />
+            </label>
+
+            <label className="toggle-row">
+              <span>
+                <strong>LLM 文本润色</strong>
+                <em>{polishSettingHint}</em>
+              </span>
+              <input
+                type="checkbox"
+                checked={state.polish_enabled}
+                onChange={(e) => post("/api/config", { polish_enabled: e.currentTarget.checked })}
               />
             </label>
 

@@ -29,7 +29,7 @@ if (-not (Test-Path -LiteralPath $Model)) {
   throw "Bundled ASR model not found: $Model"
 }
 
-$Installer = Get-ChildItem -LiteralPath (Join-Path $ReleaseDir "bundle\nsis") -Filter "言栖_0.6.7_x64-setup.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
+$Installer = Get-ChildItem -LiteralPath (Join-Path $ReleaseDir "bundle\nsis") -Filter "言栖_0.8.1_x64-setup.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
 if (-not $Installer) {
   throw "NSIS installer not found"
 }

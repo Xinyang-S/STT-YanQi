@@ -2,7 +2,7 @@
 """Headless Vernest backend for the Tauri UI.
 
 This keeps the existing audio/ASR/hotkey core usable while the desktop shell is
-rewritten in Tauri + React. The API is intentionally small and local-only.
+rewritten in Tauri + React. The API is intentionally small and bound to loopback.
 """
 
 import argparse
@@ -21,17 +21,6 @@ import voice_core as core
 
 AUTH_TOKEN = ""
 PROTOCOL_VERSION = 1
-
-
-def _disable_core_sounds():
-    def _silent():
-        return None
-
-    core.sound_start = _silent
-    core.sound_done = _silent
-    core.sound_toggle_on = _silent
-    core.sound_toggle_off = _silent
-    core.sound_error = _silent
 
 
 class BackendState:
@@ -60,6 +49,7 @@ class BackendState:
             "recording": bool(core.state.get("recording")),
             "engine": core.state.get("engine") or "none",
             "last_text": core.state.get("last_text") or "",
+            "raw_text": core.state.get("raw_text") or "",
             "last_error": core.state.get("last_error") or "",
             "audio_mode": core.state.get("audio_mode") or "共享",
             "mic_guarded": bool(core.state.get("mic_guarded")),
@@ -67,6 +57,10 @@ class BackendState:
             "floating_bubble": bool(core.config.get("floating_bubble", False)),
             "input_device_index": core.config.get("input_device_index"),
             "language": core.config.get("language", "auto"),
+            "polish_enabled": bool(core.config.get("polish_enabled", False)),
+            "polish_available": bool(core.state.get("polish_available")),
+            "polish_model": core.state.get("polish_model") or core.POLISH_MODEL_FILE,
+            "polish_last_error": core.state.get("polish_last_error") or "",
         }
 
 
@@ -87,22 +81,19 @@ def _drain_ui_queue():
             elif kind == "error":
                 core.state["last_error"] = msg[1]
             elif kind == "recording":
-                core.state["recording"] = bool(msg[1])
-            backend_state.touch(kind)
+                recording = bool(msg[1])
+                if recording and not core.state.get("recording"):
+                    core.log("backend ignored stale recording=true event after stop")
+                    continue
+                core.state["recording"] = recording
+            if kind != "status":
+                backend_state.touch(kind)
         except Exception as exc:
             core.log(f"backend queue drain failed: {exc!r}")
 
 
-def _play_toggle_sound():
-    try:
-        (core.sound_toggle_on if core.state.get("enabled") else core.sound_toggle_off)()
-    except Exception as exc:
-        core.log(f"toggle sound failed: {exc!r}")
-
-
 def _toggle_enabled():
     core.state["enabled"] = not core.state["enabled"]
-    _play_toggle_sound()
     core.ui_queue.put(("toggled", core.state["enabled"]))
     backend_state.touch("toggle")
     if not core.state["enabled"] and core.state["recording"]:
@@ -188,8 +179,14 @@ class Handler(BaseHTTPRequestHandler):
                     core.config["exclusive_device"] = bool(data["exclusive_device"])
                 if "floating_bubble" in data:
                     core.config["floating_bubble"] = bool(data["floating_bubble"])
+                if "polish_enabled" in data:
+                    core.config["polish_enabled"] = bool(data["polish_enabled"])
+                    core.state["polish_enabled"] = bool(data["polish_enabled"])
+                    if not core.config["polish_enabled"]:
+                        core.unload_polish_model()
                 if "input_device_index" in data:
                     core.config["input_device_index"] = data["input_device_index"]
+                core.refresh_polish_state()
                 core.save_config()
                 backend_state.touch("config")
                 self._send({"ok": True, "state": backend_state.snapshot()})
@@ -205,17 +202,14 @@ def main():
     parser.add_argument("--port", type=int, default=47632)
     parser.add_argument("--token", default="")
     parser.add_argument("--no-hotkeys", action="store_true")
-    parser.add_argument("--silent-sounds", action="store_true")
     args = parser.parse_args()
 
     global AUTH_TOKEN
     AUTH_TOKEN = args.token
 
     core.log("Vernest backend starting")
+    core.log("backend prompt audio is owned by Tauri")
     has_engine = core.load_config()
-    if args.silent_sounds:
-        _disable_core_sounds()
-        core.log("backend sounds disabled; Tauri host owns prompt audio")
     backend_state.service = "ready" if has_engine else "engine_missing"
     threading.Thread(target=_drain_ui_queue, daemon=True).start()
     if args.no_hotkeys:

@@ -4,7 +4,7 @@
 
 言栖 Vernest 是一款 Windows 桌面语音输入工具。应用按住快捷键录音，松开后在本机完成识别并粘贴到当前光标位置。
 
-当前版本：`0.6.7`  
+当前版本：`0.8.1`  
 作者：孙欣阳  
 项目主页：<https://github.com/Xinyang-S/STT-YanQi/tree/main>  
 版权：Copyright © 2026 孙欣阳. All rights reserved.
@@ -13,7 +13,7 @@
 
 ## 产品原则
 
-- 完全本地离线识别，不上传音频、识别文本或诊断数据。
+- 默认使用本地识别；不会自动上传音频、识别文本或诊断数据。未来如加入云端增强能力，必须由用户显式开启。
 - 默认只写本地日志，路径为 `%APPDATA%\Vernest\logs\vernest.log`。
 - 用户可在设置里手动导出本地诊断文件；应用不会自动上传。
 - 支持 Windows 10 / Windows 11 x64。
@@ -36,6 +36,8 @@ voice-input/
 Rust 宿主负责窗口、托盘、全局快捷键、提示音和 sidecar 生命周期。Python sidecar 负责本地录音、SenseVoice 识别、麦克风设备枚举和配置持久化。
 
 前后端通过 `127.0.0.1:47632` 通信，并由 Rust 宿主在启动时生成一次性 `X-Vernest-Token`，防止普通本地网页直接控制录音接口。
+
+更多开发知识库见 [docs/INDEX.md](docs/INDEX.md)。
 
 ## 数据目录
 
@@ -84,18 +86,32 @@ npm run tauri -- dev
 .\scripts\build-release.ps1
 ```
 
+下载本地润色模型：
+
+```powershell
+.\scripts\download-polish-model.ps1
+```
+
+本地 LLM 润色默认关闭。用户可在设置中手动开启；如果本地 GGUF 模型或 `llama-cpp-python` 缺失，应用会自动回退为直接粘贴 STT 原文。
+
 ## 发布产物
 
-Tauri 安装包：
+浅层安装包：
 
 ```text
-ui-tauri\src-tauri\target\release\bundle\nsis\言栖_0.6.7_x64-setup.exe
+release\言栖_0.8.1_x64-setup.exe
+```
+
+浅层便携版主程序：
+
+```text
+release\Vernest\Vernest.exe
 ```
 
 便携版 zip：
 
 ```text
-release\Vernest-0.6.7-windows-x64-portable.zip
+release\Vernest-0.8.1-windows-x64-portable.zip
 ```
 
 代码签名预留脚本：

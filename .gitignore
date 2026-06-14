@@ -30,6 +30,7 @@ models/*.zip
 models/**/*.onnx
 models/**/*.bin
 models/**/*.pb
+models/**/*.gguf
 
 # ── 日志 ──────────────────────────────────────────────
 *.log

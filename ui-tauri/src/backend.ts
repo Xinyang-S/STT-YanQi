@@ -8,6 +8,7 @@ export type BackendState = {
   recording: boolean;
   engine: string;
   last_text: string;
+  raw_text: string;
   last_error: string;
   audio_mode: string;
   mic_guarded: boolean;
@@ -15,6 +16,10 @@ export type BackendState = {
   floating_bubble: boolean;
   input_device_index: number | null;
   language: string;
+  polish_enabled: boolean;
+  polish_available: boolean;
+  polish_model: string;
+  polish_last_error: string;
 };
 
 export type BackendPayload = {

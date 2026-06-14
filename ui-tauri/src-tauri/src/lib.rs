@@ -14,9 +14,6 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
-#[cfg(target_os = "windows")]
-use std::os::windows::ffi::OsStrExt;
-
 use tauri::{
     image::Image,
     menu::{Menu, MenuItem},
@@ -32,8 +29,9 @@ use product::{
 
 #[cfg(target_os = "windows")]
 use windows_sys::Win32::{
-    Foundation::{LPARAM, LRESULT, WPARAM},
-    Media::Audio::{PlaySoundW, SND_FILENAME, SND_NODEFAULT, SND_SYNC, SND_SYSTEM},
+    Foundation::{GetLastError, ERROR_ALREADY_EXISTS, LPARAM, LRESULT, WPARAM},
+    Media::Audio::{PlaySoundW, SND_MEMORY, SND_NODEFAULT, SND_SYNC, SND_SYSTEM},
+    System::Threading::CreateMutexW,
     UI::{
         Input::KeyboardAndMouse::{
             GetAsyncKeyState, VK_CONTROL, VK_LBUTTON, VK_MBUTTON, VK_RBUTTON, VK_XBUTTON1,
@@ -111,9 +109,11 @@ struct ShortcutState {
     pressed_mouse_buttons: Vec<u16>,
     shortcut_active: bool,
     recording: bool,
+    last_input_ms: u64,
+    release_miss_count: u8,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 enum PromptSound {
     Start,
     Done,
@@ -122,15 +122,25 @@ enum PromptSound {
     Error,
 }
 
+#[derive(Clone, Copy)]
+struct PromptSoundRequest {
+    sound: PromptSound,
+    min_gap_ms: u64,
+}
+
 static BACKEND_PORT: AtomicU16 = AtomicU16::new(47632);
 static LAST_TOGGLE_MS: AtomicU64 = AtomicU64::new(0);
 static BACKEND_ENABLED: AtomicBool = AtomicBool::new(true);
 static BACKEND_RECORDING: AtomicBool = AtomicBool::new(false);
+static RECORDING_START_GRACE_UNTIL_MS: AtomicU64 = AtomicU64::new(0);
+static RECORDING_STOP_GRACE_UNTIL_MS: AtomicU64 = AtomicU64::new(0);
 static APP_HANDLE: OnceLock<AppHandle> = OnceLock::new();
-static SOUND_TX: OnceLock<mpsc::Sender<PromptSound>> = OnceLock::new();
+static SOUND_TX: OnceLock<mpsc::Sender<PromptSoundRequest>> = OnceLock::new();
 static SHORTCUT_STATE: OnceLock<Mutex<ShortcutState>> = OnceLock::new();
 static SHORTCUT_CONFIG: OnceLock<Mutex<ShortcutConfig>> = OnceLock::new();
 static BACKEND_AUTH_TOKEN: OnceLock<String> = OnceLock::new();
+#[cfg(target_os = "windows")]
+static INSTANCE_MUTEX: OnceLock<isize> = OnceLock::new();
 
 impl Drop for BackendProcess {
     fn drop(&mut self) {
@@ -151,6 +161,30 @@ struct BackendInfo {
 #[derive(Clone, serde::Serialize)]
 struct RecordingChanged {
     recording: bool,
+}
+
+#[cfg(target_os = "windows")]
+fn acquire_single_instance_lock() -> bool {
+    let name = "Local\\VernestDesktopSingleInstance"
+        .encode_utf16()
+        .chain([0])
+        .collect::<Vec<_>>();
+    unsafe {
+        let handle = CreateMutexW(std::ptr::null_mut(), 1, name.as_ptr());
+        if handle.is_null() {
+            return true;
+        }
+        if GetLastError() == ERROR_ALREADY_EXISTS {
+            return false;
+        }
+        let _ = INSTANCE_MUTEX.set(handle as isize);
+        true
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+fn acquire_single_instance_lock() -> bool {
+    true
 }
 
 fn shortcut_state() -> &'static Mutex<ShortcutState> {
@@ -419,7 +453,6 @@ fn spawn_sidecar(path: &PathBuf, port: u16, token: &str) -> Option<Child> {
     }
     command
         .arg("--no-hotkeys")
-        .arg("--silent-sounds")
         .arg("--port")
         .arg(port.to_string())
         .arg("--token")
@@ -439,7 +472,6 @@ fn spawn_python_backend(script_path: &PathBuf, port: u16, token: &str) -> Option
     Command::new("python")
         .arg(script_path)
         .arg("--no-hotkeys")
-        .arg("--silent-sounds")
         .arg("--port")
         .arg(port.to_string())
         .arg("--token")
@@ -627,60 +659,75 @@ fn prompt_sound_bytes(sound: PromptSound) -> &'static [u8] {
 }
 
 #[cfg(target_os = "windows")]
-fn prompt_sound_name(sound: PromptSound) -> &'static str {
+const SILENCE_WAV_BYTES: &[u8] = &[
+    b'R', b'I', b'F', b'F', 0x44, 0x00, 0x00, 0x00, b'W', b'A', b'V', b'E', b'f', b'm', b't', b' ',
+    0x10, 0x00, 0x00, 0x00, 0x01, 0x00, 0x01, 0x00, 0x80, 0x3e, 0x00, 0x00, 0x00, 0x7d, 0x00, 0x00,
+    0x02, 0x00, 0x10, 0x00, b'd', b'a', b't', b'a', 0x20, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+];
+
+#[cfg(target_os = "windows")]
+fn sound_dedupe_ms(sound: PromptSound) -> u64 {
     match sound {
-        PromptSound::Start => "start.wav",
-        PromptSound::Done => "done.wav",
-        PromptSound::ToggleOn => "toggle_on.wav",
-        PromptSound::ToggleOff => "toggle_off.wav",
-        PromptSound::Error => "error.wav",
+        PromptSound::Start => 250,
+        PromptSound::Done => 700,
+        PromptSound::ToggleOn | PromptSound::ToggleOff => 180,
+        PromptSound::Error => 300,
     }
 }
 
 #[cfg(target_os = "windows")]
-fn prepare_prompt_sound(sound: PromptSound) -> Vec<u16> {
-    let dir = std::env::temp_dir().join("vernest-tauri-sounds-v1");
-    let _ = fs::create_dir_all(&dir);
-    let path = dir.join(prompt_sound_name(sound));
-    let bytes = prompt_sound_bytes(sound);
-    let rewrite = fs::metadata(&path)
-        .map(|metadata| metadata.len() != bytes.len() as u64)
-        .unwrap_or(true);
-    if rewrite {
-        let _ = fs::write(&path, bytes);
+fn play_prompt_sound_bytes(bytes: &'static [u8]) {
+    if bytes.is_empty() {
+        return;
     }
-    path.as_os_str().encode_wide().chain([0]).collect()
-}
-
-#[cfg(target_os = "windows")]
-fn play_prompt_sound_now(sound: PromptSound) {
-    let path = prepare_prompt_sound(sound);
     unsafe {
         let _ = PlaySoundW(
-            path.as_ptr(),
+            bytes.as_ptr() as *const u16,
             std::ptr::null_mut(),
-            SND_FILENAME | SND_SYNC | SND_NODEFAULT | SND_SYSTEM,
+            SND_MEMORY | SND_SYNC | SND_NODEFAULT | SND_SYSTEM,
         );
     };
 }
 
 #[cfg(target_os = "windows")]
+fn play_prompt_sound_now(sound: PromptSound) {
+    play_prompt_sound_bytes(prompt_sound_bytes(sound));
+}
+
+#[cfg(target_os = "windows")]
 fn start_sound_worker() {
-    let (tx, rx) = mpsc::channel::<PromptSound>();
+    let (tx, rx) = mpsc::channel::<PromptSoundRequest>();
     if SOUND_TX.set(tx).is_err() {
         return;
     }
     thread::spawn(move || {
-        for sound in rx {
-            play_prompt_sound_now(sound);
+        play_prompt_sound_bytes(SILENCE_WAV_BYTES);
+        let mut last_sound: Option<PromptSound> = None;
+        let mut last_played_at = 0_u64;
+        for request in rx {
+            let now = now_ms();
+            if last_sound == Some(request.sound)
+                && now.saturating_sub(last_played_at) < request.min_gap_ms
+            {
+                continue;
+            }
+            last_sound = Some(request.sound);
+            last_played_at = now;
+            play_prompt_sound_now(request.sound);
         }
     });
 }
 
 #[cfg(target_os = "windows")]
 fn play_prompt_sound(sound: PromptSound) {
+    let request = PromptSoundRequest {
+        sound,
+        min_gap_ms: sound_dedupe_ms(sound),
+    };
     if let Some(tx) = SOUND_TX.get() {
-        let _ = tx.send(sound);
+        let _ = tx.send(request);
     } else {
         play_prompt_sound_now(sound);
     }
@@ -718,6 +765,21 @@ fn update_runtime_state(payload: &serde_json::Value) {
     }
 
     if let Some(recording) = state.get("recording").and_then(|value| value.as_bool()) {
+        if !recording
+            && BACKEND_RECORDING.load(Ordering::Relaxed)
+            && now_ms() < RECORDING_START_GRACE_UNTIL_MS.load(Ordering::Relaxed)
+        {
+            return;
+        }
+        if recording
+            && !BACKEND_RECORDING.load(Ordering::Relaxed)
+            && now_ms() < RECORDING_STOP_GRACE_UNTIL_MS.load(Ordering::Relaxed)
+        {
+            return;
+        }
+        if recording {
+            RECORDING_START_GRACE_UNTIL_MS.store(0, Ordering::Relaxed);
+        }
         let previous = BACKEND_RECORDING.swap(recording, Ordering::Relaxed);
         if previous != recording {
             emit_recording_changed(recording);
@@ -744,6 +806,7 @@ fn event_name(payload: &serde_json::Value) -> Option<&str> {
 
 fn prompt_for_backend_event(event: &str) -> Option<PromptSound> {
     match event {
+        "result" => Some(PromptSound::Done),
         "error" => Some(PromptSound::Error),
         _ => None,
     }
@@ -801,9 +864,32 @@ fn request_start_recording(port: u16) -> Result<serde_json::Value, String> {
         }
     }
 
-    BACKEND_RECORDING.store(true, Ordering::Relaxed);
-    emit_recording_changed(true);
-    play_prompt_sound(PromptSound::Start);
+    if BACKEND_RECORDING.load(Ordering::Relaxed) {
+        if now_ms() < RECORDING_START_GRACE_UNTIL_MS.load(Ordering::Relaxed) {
+            if let Some(payload) = get_backend_json("/api/status", port) {
+                return Ok(payload);
+            }
+            return Ok(serde_json::json!({ "ok": true }));
+        }
+        if let Some(payload) = get_backend_json("/api/status", port) {
+            let backend_recording = state_value(&payload)
+                .and_then(|state| state.get("recording"))
+                .and_then(|value| value.as_bool())
+                .unwrap_or(false);
+            publish_backend_payload(&payload);
+            if backend_recording {
+                return Ok(payload);
+            }
+        }
+    }
+
+    RECORDING_START_GRACE_UNTIL_MS.store(now_ms().saturating_add(1200), Ordering::Relaxed);
+    RECORDING_STOP_GRACE_UNTIL_MS.store(0, Ordering::Relaxed);
+    let was_recording = BACKEND_RECORDING.swap(true, Ordering::Relaxed);
+    if !was_recording {
+        emit_recording_changed(true);
+        play_prompt_sound(PromptSound::Start);
+    }
 
     match post_backend_json("/api/start", port) {
         Ok(payload) => {
@@ -812,6 +898,7 @@ fn request_start_recording(port: u16) -> Result<serde_json::Value, String> {
         }
         Err(err) => {
             BACKEND_RECORDING.store(false, Ordering::Relaxed);
+            RECORDING_START_GRACE_UNTIL_MS.store(0, Ordering::Relaxed);
             emit_recording_changed(false);
             play_prompt_sound(PromptSound::Error);
             Err(err)
@@ -820,11 +907,10 @@ fn request_start_recording(port: u16) -> Result<serde_json::Value, String> {
 }
 
 fn request_stop_recording(port: u16) -> Result<serde_json::Value, String> {
-    let was_recording = BACKEND_RECORDING.swap(false, Ordering::Relaxed);
+    RECORDING_START_GRACE_UNTIL_MS.store(0, Ordering::Relaxed);
+    RECORDING_STOP_GRACE_UNTIL_MS.store(now_ms().saturating_add(1200), Ordering::Relaxed);
+    BACKEND_RECORDING.store(false, Ordering::Relaxed);
     emit_recording_changed(false);
-    if was_recording {
-        play_prompt_sound(PromptSound::Done);
-    }
 
     match post_backend_json("/api/stop", port) {
         Ok(payload) => {
@@ -919,8 +1005,11 @@ fn finish_shortcut_update(action: Option<ShortcutAction>) {
 fn handle_shortcut_key(vk_code: u32, pressed: bool) {
     let mut action: Option<ShortcutAction> = None;
     let config = current_shortcut_config();
+    let event_at = now_ms();
 
     if let Ok(mut state) = shortcut_state().lock() {
+        state.last_input_ms = event_at;
+        state.release_miss_count = 0;
         update_pressed_u32(&mut state.pressed_keys, vk_code, pressed);
         refresh_modifier_state(&mut state);
 
@@ -944,8 +1033,11 @@ fn handle_shortcut_key(vk_code: u32, pressed: bool) {
 fn handle_shortcut_mouse(button: u16, pressed: bool) {
     let mut action: Option<ShortcutAction> = None;
     let config = current_shortcut_config();
+    let event_at = now_ms();
 
     if let Ok(mut state) = shortcut_state().lock() {
+        state.last_input_ms = event_at;
+        state.release_miss_count = 0;
         update_pressed_u16(&mut state.pressed_mouse_buttons, button, pressed);
         action = shortcut_transition(&mut state, &config);
     }
@@ -1049,7 +1141,18 @@ fn start_keyboard_hook(port: u16) {
 
 #[cfg(target_os = "windows")]
 fn shortcut_key_physically_down(vk_code: u32) -> bool {
-    unsafe { (GetAsyncKeyState(vk_code as i32) as u16) & 0x8000 != 0 }
+    let down = |code: u32| unsafe { (GetAsyncKeyState(code as i32) as u16) & 0x8000 != 0 };
+    match vk_code {
+        VK_CONTROL_CODE => {
+            down(VK_CONTROL_CODE) || down(VK_LCONTROL_CODE) || down(VK_RCONTROL_CODE)
+        }
+        VK_LCONTROL_CODE | VK_RCONTROL_CODE => down(vk_code) || down(VK_CONTROL_CODE),
+        VK_SHIFT_CODE => down(VK_SHIFT_CODE) || down(VK_LSHIFT_CODE) || down(VK_RSHIFT_CODE),
+        VK_LSHIFT_CODE | VK_RSHIFT_CODE => down(vk_code) || down(VK_SHIFT_CODE),
+        VK_MENU_CODE => down(VK_MENU_CODE) || down(VK_LMENU_CODE) || down(VK_RMENU_CODE),
+        VK_LMENU_CODE | VK_RMENU_CODE => down(vk_code) || down(VK_MENU_CODE),
+        _ => down(vk_code),
+    }
 }
 
 #[cfg(target_os = "windows")]
@@ -1072,26 +1175,45 @@ fn shortcut_mouse_physically_down(button: u16) -> bool {
 }
 
 #[cfg(target_os = "windows")]
+fn shortcut_inputs_physically_down(config: &ShortcutConfig) -> bool {
+    config
+        .keys
+        .iter()
+        .all(|code| shortcut_key_physically_down(*code))
+        && config
+            .mouse_buttons
+            .iter()
+            .all(|button| shortcut_mouse_physically_down(*button))
+}
+
+#[cfg(target_os = "windows")]
 fn start_shortcut_release_watcher() {
     thread::spawn(|| loop {
         thread::sleep(Duration::from_millis(70));
         let config = current_shortcut_config();
         let mut should_stop = false;
         if let Ok(mut state) = shortcut_state().lock() {
-            state
-                .pressed_keys
-                .retain(|code| shortcut_key_physically_down(*code));
-            state
-                .pressed_mouse_buttons
-                .retain(|button| shortcut_mouse_physically_down(*button));
-            refresh_modifier_state(&mut state);
-
-            if state.shortcut_active && !shortcut_inputs_down(&state, &config) {
-                state.shortcut_active = false;
-                if state.recording {
-                    state.recording = false;
-                    should_stop = true;
+            if state.shortcut_active && !shortcut_inputs_physically_down(&config) {
+                let idle_ms = now_ms().saturating_sub(state.last_input_ms);
+                if idle_ms >= 220 {
+                    state.release_miss_count = state.release_miss_count.saturating_add(1);
+                } else {
+                    state.release_miss_count = 0;
                 }
+
+                if state.release_miss_count >= 3 {
+                    state.shortcut_active = false;
+                    state.release_miss_count = 0;
+                    state.pressed_keys.clear();
+                    state.pressed_mouse_buttons.clear();
+                    refresh_modifier_state(&mut state);
+                    if state.recording {
+                        state.recording = false;
+                        should_stop = true;
+                    }
+                }
+            } else {
+                state.release_miss_count = 0;
             }
         }
 
@@ -1296,7 +1418,7 @@ fn export_diagnostics(state: tauri::State<'_, BackendProcess>) -> Result<String,
          backend_path: {}\n\
          backend_port: {}\n\
          backend_running: {}\n\
-         privacy: fully local; no diagnostic upload is performed by the app\n\n\
+         privacy: local-first; diagnostics are exported as a local file unless the user shares them\n\n\
          recent_log:\n{}\n",
         app_data_dir().display(),
         state.backend_path.display(),
@@ -1416,10 +1538,27 @@ mod tests {
             "[12:00:00] backend ready"
         );
     }
+
+    #[test]
+    fn result_event_is_the_only_completion_prompt() {
+        assert!(matches!(
+            prompt_for_backend_event("result"),
+            Some(PromptSound::Done)
+        ));
+        assert!(prompt_for_backend_event("stop").is_none());
+        assert!(matches!(
+            prompt_for_backend_event("error"),
+            Some(PromptSound::Error)
+        ));
+    }
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    if !acquire_single_instance_lock() {
+        return;
+    }
+
     let port = 47632;
     let backend_token = generate_backend_token();
     let _ = BACKEND_AUTH_TOKEN.set(backend_token.clone());

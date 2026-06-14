@@ -1,7 +1,7 @@
 {
   "name": "vernest",
   "private": true,
-  "version": "0.6.7",
+  "version": "0.8.1",
   "description": "Vernest desktop voice input",
   "author": "孙欣阳",
   "homepage": "https://github.com/Xinyang-S/STT-YanQi/tree/main",

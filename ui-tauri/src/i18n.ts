@@ -2,7 +2,7 @@ export const product = {
   zhName: "言栖",
   enName: "Vernest",
   displayName: "言栖 Vernest",
-  version: "0.6.7",
+  version: "0.8.1",
   copyright: "Copyright © 2026 孙欣阳. All rights reserved.",
 };
 

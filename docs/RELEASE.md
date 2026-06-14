@@ -26,3 +26,16 @@ Set `VERNEST_SIGN_CERT` and `VERNEST_SIGN_PASSWORD` locally or in CI.
 
 Use GitHub Releases and publish Tauri updater metadata as `latest.json`.
 Do not commit updater private keys.
+
+## Local LLM Polishing Model
+
+The selected polishing model is
+`qwen2.5-0.5b-instruct-q4_k_m.gguf`. It is ignored by git. Place it under
+`models\polish\` before running `build-release.ps1`; the script will copy it
+into the portable app and Tauri will include it in the installer resources.
+
+Download it to the project model directory:
+
+```powershell
+.\scripts\download-polish-model.ps1
+```

@@ -5,25 +5,63 @@ param(
 
 $ErrorActionPreference = "Stop"
 $Root = Resolve-Path -LiteralPath (Join-Path $PSScriptRoot "..")
-$Version = "0.6.7"
+$Version = "0.8.1"
 $Ui = Join-Path $Root "ui-tauri"
 $ReleaseRoot = Join-Path $Root "release"
 $TauriRelease = Join-Path $Ui "src-tauri\target\release"
-$PortableName = "Vernest-$Version-windows-x64-portable"
+$PortableName = "Vernest"
 $PortableDir = Join-Path $ReleaseRoot $PortableName
-$PortableZip = Join-Path $ReleaseRoot "$PortableName.zip"
+$PortableZip = Join-Path $ReleaseRoot "Vernest-$Version-windows-x64-portable.zip"
+$LegacyPortableDir = Join-Path $ReleaseRoot "Vernest-$Version-windows-x64-portable"
+$PolishModel = Join-Path $Root "models\polish\qwen2.5-0.5b-instruct-q4_k_m.gguf"
+
+function Invoke-Native {
+  param(
+    [Parameter(Mandatory=$true)][string]$FilePath,
+    [string[]]$Arguments = @()
+  )
+  & $FilePath @Arguments
+  if ($LASTEXITCODE -ne 0) {
+    throw "$FilePath $($Arguments -join ' ') failed with exit code $LASTEXITCODE"
+  }
+}
+
+function Stop-VernestBuildProcesses {
+  $Prefixes = @(
+    (Join-Path $Ui "src-tauri\bin"),
+    $TauriRelease,
+    $ReleaseRoot
+  )
+
+  Get-Process | Where-Object {
+    if (-not $_.Path) { return $false }
+    foreach ($Prefix in $Prefixes) {
+      if ($_.Path.StartsWith($Prefix, [System.StringComparison]::OrdinalIgnoreCase)) {
+        return $true
+      }
+    }
+    return $false
+  } | Stop-Process -Force
+  Start-Sleep -Milliseconds 300
+}
 
 if (-not $SkipBackend) {
   & (Join-Path $PSScriptRoot "build-backend.ps1")
 }
 
+if (-not (Test-Path -LiteralPath $PolishModel)) {
+  throw "Polish model not found: $PolishModel. Run .\scripts\download-polish-model.ps1 first."
+}
+
+Stop-VernestBuildProcesses
+
 Push-Location $Ui
 try {
   if (-not (Test-Path -LiteralPath "node_modules")) {
-    npm ci
+    Invoke-Native "npm" @("ci")
   }
-  npm run build
-  npm run tauri -- build
+  Invoke-Native "npm" @("run", "build")
+  Invoke-Native "npm" @("run", "tauri", "--", "build")
 } finally {
   Pop-Location
 }
@@ -33,10 +71,26 @@ if ($SkipPortable) {
 }
 
 New-Item -ItemType Directory -Force -Path $ReleaseRoot | Out-Null
+Get-ChildItem -LiteralPath $ReleaseRoot -File -Filter "言栖_*_x64-setup.exe" -ErrorAction SilentlyContinue |
+  Remove-Item -Force
+Get-ChildItem -LiteralPath $ReleaseRoot -File -Filter "Vernest-*-windows-x64-portable.zip" -ErrorAction SilentlyContinue |
+  Remove-Item -Force
 if (Test-Path -LiteralPath $PortableDir) {
   Remove-Item -LiteralPath $PortableDir -Recurse -Force
 }
+if (Test-Path -LiteralPath $LegacyPortableDir) {
+  Remove-Item -LiteralPath $LegacyPortableDir -Recurse -Force
+}
 New-Item -ItemType Directory -Force -Path $PortableDir | Out-Null
+
+$InstallerSource = Get-ChildItem -LiteralPath (Join-Path $TauriRelease "bundle\nsis") -Filter "*.exe" -ErrorAction SilentlyContinue |
+  Sort-Object LastWriteTime -Descending |
+  Select-Object -First 1
+if ($InstallerSource) {
+  $InstallerTarget = Join-Path $ReleaseRoot $InstallerSource.Name
+  Copy-Item -LiteralPath $InstallerSource.FullName -Destination $InstallerTarget -Force
+  Write-Host "Installer:" $InstallerTarget
+}
 
 $AppExe = @(
   Join-Path $TauriRelease "vernest-desktop.exe"
@@ -66,6 +120,12 @@ foreach ($Name in @("models", "resources")) {
   }
 }
 
+if (Test-Path -LiteralPath $PolishModel) {
+  $PolishTarget = Join-Path $PortableDir "models\polish"
+  New-Item -ItemType Directory -Force -Path $PolishTarget | Out-Null
+  Copy-Item -LiteralPath $PolishModel -Destination (Join-Path $PolishTarget (Split-Path -Leaf $PolishModel)) -Force
+}
+
 foreach ($Name in @("README.md", "LICENSE", "THIRD_PARTY_NOTICES.md")) {
   $Source = Join-Path $Root $Name
   if (Test-Path -LiteralPath $Source) {
@@ -77,4 +137,5 @@ if (Test-Path -LiteralPath $PortableZip) {
   Remove-Item -LiteralPath $PortableZip -Force
 }
 Compress-Archive -Path (Join-Path $PortableDir "*") -DestinationPath $PortableZip -Force
+Write-Host "Portable app:" (Join-Path $PortableDir "Vernest.exe")
 Write-Host "Portable package:" $PortableZip
