@@ -81,7 +81,9 @@ if ($SkipPortable) {
 }
 
 New-Item -ItemType Directory -Force -Path $ReleaseRoot | Out-Null
-$InstallerTargetName = "言栖_$($Version)_x64-setup.exe"
+Get-ChildItem -LiteralPath $ReleaseRoot -File -Filter "言栖_*_x64-setup.exe" -ErrorAction SilentlyContinue |
+  Remove-Item -Force
+$InstallerTargetName = "Vernest_$($Version)_x64-setup.exe"
 $InstallerTarget = Join-Path $ReleaseRoot $InstallerTargetName
 foreach ($Path in @($InstallerTarget, $PortableZip)) {
   if (Test-Path -LiteralPath $Path) {

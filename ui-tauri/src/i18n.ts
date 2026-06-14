@@ -1,7 +1,7 @@
 export const product = {
-  zhName: "言栖",
-  enName: "Vernest",
-  displayName: "言栖 Vernest",
+  zhName: "Vernest",
+  enName: "Voice Input",
+  displayName: "Vernest",
   version: "0.8.1",
   copyright: "Copyright © 2026 孙欣阳. All rights reserved.",
 };

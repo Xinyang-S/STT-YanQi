@@ -93,7 +93,7 @@ Text polishing is planned as a future cloud-model feature. The current release d
 Shallow NSIS installer:
 
 ```text
-release\言栖_0.8.1_x64-setup.exe
+release\Vernest_0.8.1_x64-setup.exe
 ```
 
 Shallow portable app:

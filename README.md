@@ -93,7 +93,7 @@ npm run tauri -- dev
 浅层安装包：
 
 ```text
-release\言栖_0.8.1_x64-setup.exe
+release\Vernest_0.8.1_x64-setup.exe
 ```
 
 浅层便携版主程序：
